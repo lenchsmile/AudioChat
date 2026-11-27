@@ -7,6 +7,7 @@ if(spdlog_FOUND AND Opus_FOUND)
         test_aec_processor.cpp
         test_reference_signal_buffer.cpp
         test_aec_audio_handler.cpp
+        test_codec_optimizer.cpp
     )
 
     # Link libraries
@@ -31,6 +32,7 @@ if(spdlog_FOUND AND Opus_FOUND)
         ${CMAKE_SOURCE_DIR}/src/AecProcessor.cpp
         ${CMAKE_SOURCE_DIR}/src/ReferenceSignalBuffer.cpp
         ${CMAKE_SOURCE_DIR}/src/AecAudioHandler.cpp
+        ${CMAKE_SOURCE_DIR}/src/CodecOptimizer.cpp
     )
 
     # Register tests

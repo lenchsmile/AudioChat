@@ -78,6 +78,7 @@ if(PortAudio_FOUND AND Opus_FOUND AND spdlog_FOUND)
         src/AecProcessor.cpp
         src/ReferenceSignalBuffer.cpp
         src/AecAudioHandler.cpp
+        src/CodecOptimizer.cpp
         src/AudioHandler.cpp
         src/AudioRecorder.cpp
         src/Codec.cpp
