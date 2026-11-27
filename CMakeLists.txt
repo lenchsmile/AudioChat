@@ -85,6 +85,11 @@ if(PortAudio_FOUND AND Opus_FOUND AND spdlog_FOUND)
         src/JitterBuffer.cpp
         src/NetworkHandler.cpp
         src/AudioChatEngine.cpp
+        src/NetworkMonitor.cpp
+        src/HeartbeatManager.cpp
+        src/CongestionController.cpp
+        src/NackHandler.cpp
+        src/AudioDeviceMonitor.cpp
     )
 
     # Target properties

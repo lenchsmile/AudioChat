@@ -9,6 +9,12 @@ if(spdlog_FOUND AND Opus_FOUND)
         test_aec_audio_handler.cpp
         test_codec_optimizer.cpp
         test_phase2_integration.cpp
+        test_network_monitor.cpp
+        test_heartbeat_manager.cpp
+        test_congestion_controller.cpp
+        test_nack_handler.cpp
+        test_audio_device_monitor.cpp
+        test_phase3_integration.cpp
     )
 
     # Link libraries
@@ -34,6 +40,11 @@ if(spdlog_FOUND AND Opus_FOUND)
         ${CMAKE_SOURCE_DIR}/src/ReferenceSignalBuffer.cpp
         ${CMAKE_SOURCE_DIR}/src/AecAudioHandler.cpp
         ${CMAKE_SOURCE_DIR}/src/CodecOptimizer.cpp
+        ${CMAKE_SOURCE_DIR}/src/NetworkMonitor.cpp
+        ${CMAKE_SOURCE_DIR}/src/HeartbeatManager.cpp
+        ${CMAKE_SOURCE_DIR}/src/CongestionController.cpp
+        ${CMAKE_SOURCE_DIR}/src/NackHandler.cpp
+        ${CMAKE_SOURCE_DIR}/src/AudioDeviceMonitor.cpp
     )
 
     # Register tests
