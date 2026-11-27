@@ -40,11 +40,21 @@ message(STATUS "========================================")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Find dependencies
-find_package(PortAudio REQUIRED)
-find_package(Opus REQUIRED)
+find_package(PortAudio QUIET)
+find_package(Opus QUIET)
 
 # Find spdlog for logging
-find_package(spdlog REQUIRED)
+find_package(spdlog QUIET)
+
+# Find WebRTC Audio Processing for echo cancellation (Phase 2)
+find_package(WebRtcAudioProcessing QUIET)
+if(WebRtcAudioProcessing_FOUND)
+    message(STATUS "WebRTC Audio Processing found - AEC enabled")
+    set(HAS_WEBRTC_AEC TRUE)
+else()
+    message(STATUS "WebRTC Audio Processing not found - AEC disabled")
+    set(HAS_WEBRTC_AEC FALSE)
+endif()
 
 # Find or use built-in gtest for testing
 enable_testing()
@@ -59,66 +69,90 @@ if(NOT GTest_FOUND)
     FetchContent_MakeAvailable(googletest)
 endif()
 
-# Create executable
-add_executable(${PROJECT_NAME}
-    src/main.cpp
-    src/Logger.cpp
-    src/Result.cpp
-    src/AudioHandler.cpp
-    src/AudioRecorder.cpp
-    src/Codec.cpp
-    src/JitterBuffer.cpp
-    src/NetworkHandler.cpp
-    src/AudioChatEngine.cpp
-)
-
-# Target properties
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    VERSION ${PROJECT_VERSION}
-    OUTPUT_NAME ${PROJECT_NAME}
-    CXX_STANDARD ${CMAKE_CXX_STANDARD}
-    CXX_STANDARD_REQUIRED ON
-    CXX_EXTENSIONS OFF
-)
-
-# Target include directories
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${PORTAUDIO_INCLUDE_DIRS}
-    ${OPUS_INCLUDE_DIRS}
-)
-
-# Link libraries
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    PortAudio::PortAudio
-    Opus::Opus
-    spdlog::spdlog
-    ws2_32
-    winmm
-)
-
-# Compile definitions based on build type
-target_compile_definitions(${PROJECT_NAME} PRIVATE
-    $<$<CONFIG:Debug>:_DEBUG>
-    $<$<CONFIG:Release>:NDEBUG>
-)
-
-# Compiler warnings for Clang/GCC
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(${PROJECT_NAME} PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wconversion
-        -Wsign-conversion
+# Create executable only if dependencies are available
+if(PortAudio_FOUND AND Opus_FOUND AND spdlog_FOUND)
+    add_executable(${PROJECT_NAME}
+        src/main.cpp
+        src/Logger.cpp
+        src/Result.cpp
+        src/AecProcessor.cpp
+        src/AudioHandler.cpp
+        src/AudioRecorder.cpp
+        src/Codec.cpp
+        src/JitterBuffer.cpp
+        src/NetworkHandler.cpp
+        src/AudioChatEngine.cpp
     )
-endif()
 
-# Copy config file to binary directory
-configure_file(${CMAKE_SOURCE_DIR}/config.ini
-    ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/config.ini
-    COPYONLY
-)
+    # Target properties
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        VERSION ${PROJECT_VERSION}
+        OUTPUT_NAME ${PROJECT_NAME}
+        CXX_STANDARD ${CMAKE_CXX_STANDARD}
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    # Target include directories
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${PORTAUDIO_INCLUDE_DIRS}
+        ${OPUS_INCLUDE_DIRS}
+    )
+
+    # Link libraries
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        PortAudio::PortAudio
+        Opus::Opus
+        spdlog::spdlog
+        ws2_32
+        winmm
+    )
+
+    # Link WebRTC Audio Processing if available
+    if(HAS_WEBRTC_AEC)
+        target_link_libraries(${PROJECT_NAME} PRIVATE
+            WebRtcAudioProcessing::WebRtcAudioProcessing
+        )
+        target_compile_definitions(${PROJECT_NAME} PRIVATE
+            HAS_WEBRTC_AEC=1
+        )
+    endif()
+
+    # Compile definitions based on build type
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        $<$<CONFIG:Debug>:_DEBUG>
+        $<$<CONFIG:Release>:NDEBUG>
+    )
+
+    # Compiler warnings for Clang/GCC
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(${PROJECT_NAME} PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wsign-conversion
+        )
+    endif()
+
+    # Copy config file to binary directory
+    configure_file(${CMAKE_SOURCE_DIR}/config.ini
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/config.ini
+        COPYONLY
+    )
+else()
+    message(STATUS "Skipping main executable - missing dependencies:")
+    if(NOT PortAudio_FOUND)
+        message(STATUS "  - PortAudio not found")
+    endif()
+    if(NOT Opus_FOUND)
+        message(STATUS "  - Opus not found")
+    endif()
+    if(NOT spdlog_FOUND)
+        message(STATUS "  - spdlog not found")
+    endif()
+endif()
 
 # Uninstall target
 if(NOT TARGET uninstall)

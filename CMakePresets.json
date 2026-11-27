@@ -16,9 +16,7 @@
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/thirdparty/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/thirdparty/vcpkg/installed"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
     {
@@ -31,9 +29,7 @@
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/thirdparty/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/thirdparty/vcpkg/installed"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
     {
@@ -44,9 +40,7 @@
       "binaryDir": "${sourceDir}/out/build/msvc-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/thirdparty/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/thirdparty/vcpkg/installed"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
     {
@@ -57,9 +51,7 @@
       "binaryDir": "${sourceDir}/out/build/msvc-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/thirdparty/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/thirdparty/vcpkg/installed"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     }
   ],
