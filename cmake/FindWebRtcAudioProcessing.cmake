@@ -4,7 +4,10 @@
 # unofficial::webrtc::webrtc. The old webrtc-audio-processing port name is not
 # available in current vcpkg and uses a different standalone API.
 
-find_package(webrtc CONFIG QUIET)
+find_package(unofficial-webrtc CONFIG QUIET)
+if(NOT TARGET unofficial::webrtc::webrtc)
+    find_package(webrtc CONFIG QUIET)
+endif()
 
 set(_webrtc_apm_found FALSE)
 if(TARGET unofficial::webrtc::webrtc)
@@ -13,16 +16,15 @@ if(TARGET unofficial::webrtc::webrtc)
     set(WebRtcAudioProcessing_LIBRARIES unofficial::webrtc::webrtc)
 else()
     find_path(WebRtcAudioProcessing_INCLUDE_DIR
-        NAMES modules/audio_processing/include/audio_processing.h
+        NAMES api/audio/builtin_audio_processing_builder.h
         PATHS
             $ENV{WEBRTC_ROOT}/include
             /usr/include
             /usr/local/include
             ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/webrtc/include
-        PATH_SUFFIXES webrtc-audio-processing
     )
     find_library(WebRtcAudioProcessing_LIBRARY
-        NAMES webrtc webrtc_audio_processing
+        NAMES webrtc
         PATHS
             $ENV{WEBRTC_ROOT}/lib
             /usr/lib

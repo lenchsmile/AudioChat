@@ -2,7 +2,9 @@
 
 #include "Result.h"
 #include <cstdint>
+#include <atomic>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace AudioChat {
@@ -21,7 +23,8 @@ struct AecConfig {
     
     // AEC settings
     bool enable_aec = true;              ///< Enable acoustic echo cancellation
-    int32_t aec_suppression_level = 2;   ///< AEC suppression level (0=Low, 1=Moderate, 2=High)
+    int32_t aec_suppression_level = 2;   ///< Reserved compatibility setting; current backend uses validated defaults
+    int32_t stream_delay_ms = 0;          ///< Residual reverse-to-capture delay hint
     
     // Noise suppression
     bool enable_ns = true;               ///< Enable noise suppression
@@ -93,15 +96,14 @@ public:
      * 
      * Cleans up WebRTC audio processing resources
      */
-    ~AecProcessor() = default;
+    ~AecProcessor();
     
     // Delete copy operations
     AecProcessor(const AecProcessor&) = delete;
     AecProcessor& operator=(const AecProcessor&) = delete;
     
-    // Allow move operations
-    AecProcessor(AecProcessor&&) = default;
-    AecProcessor& operator=(AecProcessor&&) = default;
+    AecProcessor(AecProcessor&&) = delete;
+    AecProcessor& operator=(AecProcessor&&) = delete;
     
     /**
      * @brief Process reference signal (speaker/far-end audio)
@@ -142,8 +144,12 @@ public:
     Result<void> SetAecEnabled(bool enable);
     
     /**
-     * @brief Set AEC suppression level
-     * 
+     * @brief Set the reserved AEC suppression-level compatibility setting.
+     *
+     * The current WebRTC backend uses validated default AEC3 tuning. This
+     * setter validates and stores the value for configuration compatibility;
+     * it does not change suppression strength.
+     *
      * @param level Suppression level (0=Low, 1=Moderate, 2=High)
      * @return Result indicating success or error
      * 
@@ -151,13 +157,26 @@ public:
      *   - AudioChatError::InvalidArgument: Level out of range
      */
     Result<void> SetAecSuppressionLevel(int32_t level);
+
+    /**
+     * @brief Reset processor state after an underrun, device change or resync.
+     */
+    Result<void> Reset();
     
     /**
      * @brief Get current configuration
      * 
      * @return Current AecConfig
      */
-    const AecConfig& GetConfig() const { return config_; }
+    AecConfig GetConfig() const;
+
+    /**
+     * @brief True only when a real Audio Processing backend is active.
+     */
+    bool IsBackendActive() const;
+
+    std::optional<double> GetEchoReturnLossEnhancement() const;
+    std::optional<int32_t> GetAecDelayMs() const;
     
     /**
      * @brief Get statistics about processing
@@ -180,6 +199,7 @@ private:
      * @return Result indicating success or error
      */
     Result<void> Initialize();
+    Result<void> ResetLocked();
     
     /**
      * @brief Validate audio frame
@@ -193,12 +213,12 @@ private:
     AecConfig config_;
     
     // State
-    bool is_initialized_ = false;
+    std::atomic<bool> is_initialized_{false};
     uint64_t frames_processed_ = 0;
     
-    // WebRTC audio processing module pointer
-    // Using void* to avoid direct WebRTC header dependency
-    void* apm_ = nullptr;
+    // WebRTC implementation is hidden behind a pimpl boundary.
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace AudioChat

@@ -1,8 +1,8 @@
 {
   "version": 6,
   "cmakeMinimumRequired": {
-    "major": 3,
-    "minor": 28,
+    "major": 4,
+    "minor": 2,
     "patch": 0
   },
   "configurePresets": [
@@ -53,6 +53,25 @@
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
+    },
+    {
+      "name": "msvc-aec-release",
+      "displayName": "MSVC Release with required WebRTC AEC",
+      "description": "Production AEC build using the vcpkg aec manifest feature",
+      "generator": "Visual Studio 18 2026",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "binaryDir": "${sourceDir}/out/build/msvc-aec-release",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_MANIFEST_FEATURES": "aec",
+        "BUILD_TESTING": "ON",
+        "REQUIRE_AEC": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -79,6 +98,12 @@
       "configurePreset": "msvc-release",
       "displayName": "MSVC Release Build",
       "targets": ["AudioChat", "AudioChatTests"]
+    },
+    {
+      "name": "msvc-aec-release",
+      "configurePreset": "msvc-aec-release",
+      "displayName": "MSVC AEC Release Build",
+      "targets": ["AudioChat", "AudioChatTests"]
     }
   ],
   "testPresets": [
@@ -95,6 +120,33 @@
       "name": "clang-release",
       "configurePreset": "clang-release",
       "displayName": "Clang Release Tests",
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "msvc-debug",
+      "configurePreset": "msvc-debug",
+      "displayName": "MSVC Debug Tests",
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-release",
+      "displayName": "MSVC Release Tests",
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "msvc-aec-release",
+      "configurePreset": "msvc-aec-release",
+      "displayName": "MSVC AEC Release Tests",
       "execution": {
         "noTestsAction": "error",
         "stopOnFailure": true

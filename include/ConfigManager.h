@@ -36,8 +36,8 @@ struct CodecConfig {
  */
 struct AecConfigSettings {
     bool enable = true;
-    uint32_t filter_length_ms = 128;
-    uint32_t suppression_level = 2;
+    uint32_t filter_length_ms = 128; ///< Reference-buffer capacity; not the WebRTC adaptive filter length
+    uint32_t suppression_level = 2; ///< Reserved compatibility value; current AEC3 tuning is fixed
 };
 
 /**

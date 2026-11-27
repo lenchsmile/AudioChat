@@ -40,6 +40,9 @@ AudioChatConfig convertConfig(const ApplicationConfig& config) {
     engine_config.complexity = static_cast<int>(config.codec.complexity);
     engine_config.enable_fec = config.codec.enable_fec;
     engine_config.enable_dtx = config.codec.enable_dtx;
+    engine_config.enable_aec = config.aec.enable;
+    engine_config.aec_suppression_level = static_cast<int>(config.aec.suppression_level);
+    engine_config.reference_buffer_ms = static_cast<int>(config.aec.filter_length_ms);
     return engine_config;
 }
 
@@ -146,8 +149,13 @@ int main(int argc, char** argv) {
         const auto& config = config_manager.getConfig();
 #ifndef HAS_WEBRTC_AEC
         if (config.aec.enable) {
-            LOG_WARN("AEC was requested, but this developer build has no WebRTC backend; AEC is not active");
-            std::cout << "Warning: AEC is not active in this build.\n";
+            if (check_only) {
+                std::cout << "Warning: runtime AEC is unavailable in this build.\n";
+            } else {
+                throw std::runtime_error(
+                    "AEC was requested but this build has no WebRTC backend; "
+                    "build with the aec feature or set aec.enable=false");
+            }
         }
 #endif
         std::cout << "AudioChat 0.5.0\n"
@@ -173,6 +181,7 @@ int main(int argc, char** argv) {
         }
 
         std::cout << "Running. Press Ctrl+C to stop.\n";
+        std::cout << "AEC: " << (engine.isAecActive() ? "active" : "inactive") << "\n";
         const auto started = std::chrono::steady_clock::now();
         while (g_running.load()) {
             if (!engine.isRunning()) {
@@ -186,9 +195,15 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
+        LOG_INFO("AEC statistics:\n{}", engine.getAecStatistics());
+        const std::string fatal_error = engine.getFatalError();
         result = engine.stop();
         if (result.isError()) {
             LOG_WARN("Engine stop reported: {}", result.message());
+        }
+        if (!fatal_error.empty()) {
+            std::cerr << "Fatal runtime error: " << fatal_error << '\n';
+            return 1;
         }
         std::cout << "Stopped.\n";
         return 0;

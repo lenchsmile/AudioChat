@@ -46,19 +46,27 @@ uint64_t readU64(const uint8_t* source) {
     return value;
 }
 
-bool validAudioFormat(uint16_t sample_rate, uint16_t channels) {
+bool validAudioFormat(uint16_t sample_rate, uint16_t channels, uint16_t frame_duration_ms) {
     return (sample_rate == 8000 || sample_rate == 16000 ||
             sample_rate == 32000 || sample_rate == 48000) &&
-           (channels == 1 || channels == 2);
+           (channels == 1 || channels == 2) &&
+           (frame_duration_ms == 10 || frame_duration_ms == 20);
 }
 
 } // namespace
 
 NetworkHandler::NetworkHandler(const char* local_ip, const char* remote_ip,
-                               int local_port, int remote_port)
-    : jitter_buffer_(64) {
+                               int local_port, int remote_port,
+                               uint16_t expected_sample_rate, uint16_t expected_channels,
+                               uint16_t expected_frame_duration_ms)
+    : jitter_buffer_(64),
+      expected_sample_rate_(expected_sample_rate),
+      expected_channels_(expected_channels),
+      expected_frame_duration_ms_(expected_frame_duration_ms) {
     if (!local_ip || !remote_ip || local_port <= 0 || local_port > 65535 ||
-        remote_port <= 0 || remote_port > 65535) {
+        remote_port <= 0 || remote_port > 65535 ||
+        !validAudioFormat(expected_sample_rate, expected_channels,
+                          expected_frame_duration_ms)) {
         throw std::invalid_argument("Invalid network configuration");
     }
 
@@ -121,7 +129,10 @@ NetworkHandler::~NetworkHandler() {
 bool NetworkHandler::send(Packet& packet) {
     if (stopped_.load() || packet.data_size < 0 ||
         static_cast<size_t>(packet.data_size) > kMaxAudioPacketPayload ||
-        !validAudioFormat(packet.sample_rate, packet.channels)) {
+        !validAudioFormat(packet.sample_rate, packet.channels, packet.frame_duration_ms) ||
+        packet.sample_rate != expected_sample_rate_ ||
+        packet.channels != expected_channels_ ||
+        packet.frame_duration_ms != expected_frame_duration_ms_) {
         return false;
     }
 
@@ -136,7 +147,9 @@ bool NetworkHandler::send(Packet& packet) {
     writeU64(wire.data() + 8, packet.timestamp_us);
     writeU16(wire.data() + 16, packet.sample_rate);
     writeU16(wire.data() + 18, packet.channels);
-    writeU32(wire.data() + 20, static_cast<uint32_t>(packet.data_size));
+    writeU16(wire.data() + 20, packet.frame_duration_ms);
+    writeU16(wire.data() + 22, 0); // Reserved for protocol v2 flags.
+    writeU32(wire.data() + 24, static_cast<uint32_t>(packet.data_size));
     if (packet.data_size > 0) {
         std::memcpy(wire.data() + kAudioPacketHeaderSize, packet.payload.data(),
                     static_cast<size_t>(packet.data_size));
@@ -176,7 +189,7 @@ bool NetworkHandler::receive() {
         return false;
     }
 
-    const uint32_t payload_size = readU32(wire.data() + 20);
+    const uint32_t payload_size = readU32(wire.data() + 24);
     if (payload_size > kMaxAudioPacketPayload ||
         payload_size > static_cast<size_t>(length - kAudioPacketHeaderSize)) {
         return false;
@@ -184,7 +197,10 @@ bool NetworkHandler::receive() {
 
     const uint16_t sample_rate = readU16(wire.data() + 16);
     const uint16_t channels = readU16(wire.data() + 18);
-    if (!validAudioFormat(sample_rate, channels)) {
+    const uint16_t frame_duration_ms = readU16(wire.data() + 20);
+    if (!validAudioFormat(sample_rate, channels, frame_duration_ms) ||
+        sample_rate != expected_sample_rate_ || channels != expected_channels_ ||
+        frame_duration_ms != expected_frame_duration_ms_) {
         return false;
     }
 
@@ -193,6 +209,7 @@ bool NetworkHandler::receive() {
     packet.timestamp_us = readU64(wire.data() + 8);
     packet.sample_rate = sample_rate;
     packet.channels = channels;
+    packet.frame_duration_ms = frame_duration_ms;
     packet.data_size = static_cast<int32_t>(payload_size);
     if (payload_size > 0) {
         std::memcpy(packet.payload.data(), wire.data() + kAudioPacketHeaderSize, payload_size);
@@ -202,11 +219,17 @@ bool NetworkHandler::receive() {
 
 bool NetworkHandler::getJitterBufferPacket(uint8_t* destination, size_t capacity,
                                            int32_t& out_size) {
+    return getJitterBufferPacketWithTimeout(destination, capacity, out_size, -1) ==
+           JitterBuffer::Result::Packet;
+}
+
+JitterBuffer::Result NetworkHandler::getJitterBufferPacketWithTimeout(
+    uint8_t* destination, size_t capacity, int32_t& out_size, int timeout_ms) {
     if (stopped_.load()) {
         out_size = 0;
-        return false;
+        return JitterBuffer::Result::Stopped;
     }
-    return jitter_buffer_.getPacket(destination, capacity, out_size);
+    return jitter_buffer_.getPacketWithTimeout(destination, capacity, out_size, timeout_ms);
 }
 
 void NetworkHandler::stop() {

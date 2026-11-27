@@ -22,8 +22,8 @@ codec:
   enable_vbr: true
 aec:
   enable: true
-  filter_length_ms: 256
-  suppression_level: 2
+  filter_length_ms: 256  # Larger reference buffer; not the WebRTC adaptive filter length.
+  suppression_level: 2  # Reserved compatibility value; current AEC3 tuning is fixed.
 network_reliability:
   enable_monitoring: true
   enable_congestion_control: true

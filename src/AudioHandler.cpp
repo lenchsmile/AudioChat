@@ -21,7 +21,7 @@ bool isAutoDevice(const std::string& name) {
 AudioHandler::AudioHandler(int input_sample_rate, int output_sample_rate,
                            int input_frames_per_buffer, int output_frames_per_buffer,
                            const char* input_name, const char* output_name,
-                           HANDLE capture_ready_event)
+                           HANDLE capture_ready_event, bool auto_start)
     : capture_queue_(64, static_cast<size_t>(std::max(1, input_frames_per_buffer))),
       playback_queue_(64, static_cast<size_t>(std::max(1, output_frames_per_buffer))),
       capture_ready_event_(capture_ready_event),
@@ -76,16 +76,8 @@ AudioHandler::AudioHandler(int input_sample_rate, int output_sample_rate,
                                      Pa_GetErrorText(error));
         }
 
-        error = Pa_StartStream(input_stream_);
-        if (error != paNoError) {
-            throw std::runtime_error(std::string("Pa_StartStream (input) failed: ") +
-                                     Pa_GetErrorText(error));
-        }
-
-        error = Pa_StartStream(output_stream_);
-        if (error != paNoError) {
-            throw std::runtime_error(std::string("Pa_StartStream (output) failed: ") +
-                                     Pa_GetErrorText(error));
+        if (auto_start) {
+            start();
         }
     } catch (...) {
         cleanupStreams();
@@ -98,10 +90,11 @@ AudioHandler::AudioHandler(int input_sample_rate, int output_sample_rate,
 }
 
 AudioHandler::AudioHandler(int frame_cache_time, const char* input_name,
-                           const char* output_name, HANDLE capture_ready_event)
+                           const char* output_name, HANDLE capture_ready_event,
+                           bool auto_start)
     : AudioHandler(48000, 48000, 48000 * frame_cache_time / 1000,
                    48000 * frame_cache_time / 1000, input_name, output_name,
-                   capture_ready_event) {
+                   capture_ready_event, auto_start) {
 }
 
 AudioHandler::~AudioHandler() {
@@ -144,6 +137,49 @@ bool AudioHandler::readCaptureFrame(int16_t* destination, size_t capacity_sample
         return false;
     }
     return capture_queue_.tryReadTo(destination);
+}
+
+bool AudioHandler::readLatestCaptureFrame(int16_t* destination, size_t capacity_samples) {
+    if (!destination || capacity_samples < static_cast<size_t>(input_frames_per_buffer_)) {
+        return false;
+    }
+
+    bool has_frame = false;
+    while (capture_queue_.tryReadTo(destination)) {
+        has_frame = true;
+    }
+    return has_frame;
+}
+
+void AudioHandler::discardCaptureFrames() {
+    while (capture_queue_.tryAcquireRead()) {
+        capture_queue_.commitRead();
+    }
+}
+
+void AudioHandler::start() {
+    if (stopped_.load()) {
+        throw std::runtime_error("AudioHandler is stopped");
+    }
+    if (!input_stream_ || !output_stream_) {
+        throw std::runtime_error("Audio streams are not open");
+    }
+    if (Pa_IsStreamActive(input_stream_) == 1 && Pa_IsStreamActive(output_stream_) == 1) {
+        return;
+    }
+
+    PaError error = Pa_StartStream(input_stream_);
+    if (error != paNoError) {
+        throw std::runtime_error(std::string("Pa_StartStream (input) failed: ") +
+                                 Pa_GetErrorText(error));
+    }
+
+    error = Pa_StartStream(output_stream_);
+    if (error != paNoError) {
+        Pa_StopStream(input_stream_);
+        throw std::runtime_error(std::string("Pa_StartStream (output) failed: ") +
+                                 Pa_GetErrorText(error));
+    }
 }
 
 void AudioHandler::play(const int16_t* data, int32_t sample_count) {

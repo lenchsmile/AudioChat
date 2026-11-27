@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 4.2)
 
 project(AudioChat
     VERSION 0.5.0
@@ -16,6 +16,7 @@ endif()
 
 option(BUILD_TESTING "Build AudioChat tests" ON)
 option(BUILD_GUI "Build Qt GUI application" OFF)
+option(BUILD_ACOUSTIC_TOOL "Build the manual real-device AEC validation tool" OFF)
 option(REQUIRE_AEC "Require a real WebRTC Audio Processing backend" OFF)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -116,6 +117,14 @@ endif()
 add_executable(AudioChat src/main.cpp)
 target_link_libraries(AudioChat PRIVATE audiochat_core)
 
+if(BUILD_ACOUSTIC_TOOL)
+    if(NOT HAS_WEBRTC_AEC)
+        message(FATAL_ERROR "BUILD_ACOUSTIC_TOOL requires a WebRTC Audio Processing backend")
+    endif()
+    add_executable(AudioChatAecCheck tools/aec_acoustic_check.cpp)
+    target_link_libraries(AudioChatAecCheck PRIVATE audiochat_core)
+endif()
+
 if(MSVC)
     target_compile_options(AudioChat PRIVATE /W4 /permissive-)
 endif()
@@ -140,6 +149,9 @@ endif()
 install(TARGETS AudioChat
     RUNTIME DESTINATION bin
 )
+if(TARGET AudioChatAecCheck)
+    install(TARGETS AudioChatAecCheck RUNTIME DESTINATION bin)
+endif()
 install(FILES $<TARGET_RUNTIME_DLLS:AudioChat>
     DESTINATION bin
 )

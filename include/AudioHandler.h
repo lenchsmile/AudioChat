@@ -22,9 +22,10 @@ public:
     AudioHandler(int input_sample_rate, int output_sample_rate,
                  int input_frames_per_buffer, int output_frames_per_buffer,
                  const char* input_name, const char* output_name,
-                 HANDLE capture_ready_event = nullptr);
+                 HANDLE capture_ready_event = nullptr, bool auto_start = true);
     AudioHandler(int frame_cache_time, const char* input_name,
-                 const char* output_name, HANDLE capture_ready_event = nullptr);
+                 const char* output_name, HANDLE capture_ready_event = nullptr,
+                 bool auto_start = true);
 
     AudioHandler(const AudioHandler&) = delete;
     AudioHandler& operator=(const AudioHandler&) = delete;
@@ -34,6 +35,9 @@ public:
     ~AudioHandler();
 
     bool readCaptureFrame(int16_t* destination, size_t capacity_samples);
+    bool readLatestCaptureFrame(int16_t* destination, size_t capacity_samples);
+    void discardCaptureFrames();
+    void start();
     void startRecordeAudio();
     void stopRecordeAudio();
     bool isRecording() const { return recording_.load(); }

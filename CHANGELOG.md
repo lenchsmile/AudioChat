@@ -1,5 +1,42 @@
 # Changelog
 
+## [Unreleased] - 2026-11-28
+
+### Added
+
+- Real WebRTC Audio Processing/AEC3 backend behind the vcpkg `aec` feature
+- 10/20 ms AEC processing, delayed reference buffering and engine integration
+- Synthetic ERLE, near-end preservation, double-talk and 20 ms effect tests
+- Optional `AudioChatAecCheck` real-device tool with a greater-than-10 dB ERLE gate
+- AUH2 wire format with sample rate, channel count and frame duration
+- Headless AEC pipeline creation for offline processing and deterministic tests
+- Fatal worker-error reporting and nonzero process exit status
+
+### Fixed
+
+- Audio streams now start with the engine; stale startup capture is discarded and the latest capture frame is used
+- Incompatible peer frame durations are rejected before they can cause AEC reference underflow
+- DTX and unexpected decoded frame sizes are normalized to the local frame size, with AEC resynchronization when needed
+- Acoustic check reference/capture pairing no longer strands a pending reference on capture underruns
+- WebRTC default high-pass filtering is retained
+- Strict AEC underflow and explicit passthrough behavior are covered by real pipeline tests
+
+### Verification
+
+- AEC Release: 250/250 tests passed
+- no-AEC Debug: 245/245 tests passed
+- no-AEC Release: 245/245 tests passed
+- Default AEC engine startup, 2-second run and graceful stop passed
+- Real speaker/microphone acoustic ERLE: 11.15 dB over 400 measured frames
+
+### Known limitations
+
+- `aec.suppression_level` is reserved and does not change current AEC3 tuning
+- `aec.filter_length_ms` controls reference-buffer capacity only
+- GUI and full engine-side network reliability integration remain unfinished
+- UDP is unencrypted and unauthenticated; trusted LAN only
+- Windows x64 only
+
 ## [0.5.0] - 2026-11-27
 
 ### Added

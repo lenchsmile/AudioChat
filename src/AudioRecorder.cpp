@@ -1,4 +1,5 @@
 #include "AudioRecorder.h"
+#include <algorithm>
 #include <stdexcept>
 #include <chrono>
 #include <ctime>
@@ -103,9 +104,8 @@ void AudioRecorder::recordMixed(const std::vector<int16_t>& local,const std::vec
 	std::vector<int16_t> mixed(local.size());
 	for(size_t i = 0; i < local.size(); ++i)
 	{
-		int16_t sample = (static_cast<int16_t>(local[i]) + static_cast<int16_t>(remote[i])) * 0.5f; // 平均混合
-		if(sample > 32767.0f) sample = 32767.0f;
-		else if(sample < -32768.0f) sample = -32768.0f;
+		int32_t sample = (static_cast<int32_t>(local[i]) + static_cast<int32_t>(remote[i])) / 2;
+		sample = std::clamp(sample, int32_t{-32768}, int32_t{32767});
 		mixed[i] = static_cast<int16_t>(sample);
 	}
 
@@ -186,11 +186,13 @@ void AudioRecorder::writeWavHeader(std::ofstream& file,int sample_rate,int chann
 	file.write(reinterpret_cast<const char*>(&subchunk1_size),4);
 	uint16_t audio_format = 1; // PCM
 	file.write(reinterpret_cast<const char*>(&audio_format),2);
-	file.write(reinterpret_cast<const char*>(&channels),2);
-	file.write(reinterpret_cast<const char*>(&sample_rate),4);
-	uint32_t byte_rate = sample_rate * channels * 2;
+	uint16_t channel_count = static_cast<uint16_t>(channels);
+	file.write(reinterpret_cast<const char*>(&channel_count),2);
+	uint32_t sample_rate_value = static_cast<uint32_t>(sample_rate);
+	file.write(reinterpret_cast<const char*>(&sample_rate_value),4);
+	uint32_t byte_rate = static_cast<uint32_t>(sample_rate * channels * 2);
 	file.write(reinterpret_cast<const char*>(&byte_rate),4);
-	uint16_t block_align = channels * 2;
+	uint16_t block_align = static_cast<uint16_t>(channels * 2);
 	file.write(reinterpret_cast<const char*>(&block_align),2);
 	uint16_t bits_per_sample = 16;
 	file.write(reinterpret_cast<const char*>(&bits_per_sample),2);

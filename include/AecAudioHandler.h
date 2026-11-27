@@ -4,6 +4,7 @@
 #include "AecProcessor.h"
 #include "ReferenceSignalBuffer.h"
 #include <memory>
+#include <mutex>
 #include <atomic>
 #include <cstdint>
 
@@ -26,11 +27,11 @@ namespace AudioChat {
  * 2. Capture Signal (Microphone/Near-end Audio):
  *    - Processed through AecProcessor
  *    - Uses delayed reference signal for echo cancellation
- *    - Original audio path preserved if AEC fails
+ *    - Processing failures are fatal by default; passthrough is opt-in
  * 
  * 3. Configuration:
  *    - AEC can be enabled/disabled dynamically
- *    - Graceful fallback to original audio path
+ *    - Explicit degraded mode is available with allow_passthrough_on_error
  *    - Zero impact on existing code when disabled
  * 
  * @note This is a HIGH-RISK component that modifies audio processing.
@@ -44,6 +45,7 @@ public:
     struct Config {
         // AEC Feature control
         bool enable_aec = false;                ///< Enable AEC processing
+        bool allow_passthrough_on_error = false; ///< Explicit degraded mode for runtime processing failures only
         
         // AEC Processor config (if enabled)
         AecConfig aec_config;                   ///< AEC processor configuration
@@ -75,6 +77,14 @@ public:
     );
 
     /**
+     * @brief Create the AEC pipeline without an audio-device backend.
+     *
+     * This supports offline/headless processing and deterministic tests. The
+     * returned handler has no GetAudioHandler() instance.
+     */
+    static Result<std::unique_ptr<AecAudioHandler>> CreateHeadless(const Config& config);
+
+    /**
      * @brief Destructor
      */
     ~AecAudioHandler();
@@ -83,9 +93,8 @@ public:
     AecAudioHandler(const AecAudioHandler&) = delete;
     AecAudioHandler& operator=(const AecAudioHandler&) = delete;
 
-    // Allow move operations
-    AecAudioHandler(AecAudioHandler&&) = default;
-    AecAudioHandler& operator=(AecAudioHandler&&) = default;
+    AecAudioHandler(AecAudioHandler&&) = delete;
+    AecAudioHandler& operator=(AecAudioHandler&&) = delete;
 
     /**
      * @brief Get underlying AudioHandler (for existing code compatibility)
@@ -140,8 +149,9 @@ public:
      * @brief Process capture signal (microphone input) with AEC
      * 
      * Applies echo cancellation to microphone input using the buffered
-     * reference signal. If AEC is disabled or insufficient buffered data,
-     * returns original audio unchanged.
+     * reference signal. If AEC is disabled, returns the original audio.
+     * If AEC is enabled and processing fails, returns an error unless
+     * allow_passthrough_on_error was explicitly enabled.
      * 
      * @param input Microphone audio (16-bit signed PCM)
      * @param num_samples Number of samples (per channel)
@@ -149,7 +159,8 @@ public:
      * @return Result indicating success or error
      * 
      * @note Caller must ensure output buffer is large enough
-     * @note If AEC fails, original audio is returned unchanged
+     * @note Passthrough on processing failure is opt-in only. Configuration,
+     *       backend-creation and reference-buffer allocation failures remain fatal.
      */
     Result<void> ProcessCaptureSignal(const int16_t* input, int32_t num_samples,
                                       int16_t* output);
@@ -191,7 +202,7 @@ public:
      * 
      * @return Current configuration
      */
-    const Config& GetConfig() const { return config_; }
+    Config GetConfig() const;
 
 private:
     /**
@@ -204,6 +215,7 @@ private:
      * @brief Internal initialization
      */
     Result<void> Initialize();
+    Result<void> PrimeReferenceBuffer();
 
     // Configuration
     Config config_;
@@ -211,9 +223,9 @@ private:
     // State
     bool is_initialized_ = false;
     std::atomic<bool> aec_enabled_{false};
-    uint64_t reference_frames_processed_ = 0;
-    uint64_t capture_frames_processed_ = 0;
-    uint64_t aec_failures_ = 0;
+    std::atomic<uint64_t> reference_frames_processed_{0};
+    std::atomic<uint64_t> capture_frames_processed_{0};
+    std::atomic<uint64_t> aec_failures_{0};
 
     // Underlying audio handler (old API)
     std::unique_ptr<AudioHandler> audio_handler_;
@@ -221,6 +233,7 @@ private:
     // AEC components (lazy-initialized if AEC enabled)
     std::unique_ptr<AecProcessor> aec_processor_;
     std::unique_ptr<ReferenceSignalBuffer> reference_buffer_;
+    mutable std::mutex pipeline_mutex_;
 };
 
 } // namespace AudioChat

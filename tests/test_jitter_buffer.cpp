@@ -98,3 +98,17 @@ TEST(JitterBufferTest, StopWakesBlockedReader) {
     reader.join();
     EXPECT_EQ(size, 0);
 }
+
+TEST(JitterBufferTest, TimeoutDoesNotBlockIndefinitely) {
+    JitterBuffer buffer(4);
+    std::array<uint8_t, 8> output{};
+    int32_t size = -1;
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = buffer.getPacketWithTimeout(output.data(), output.size(), size, 10);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    EXPECT_EQ(result, JitterBuffer::Result::Timeout);
+    EXPECT_EQ(size, 0);
+    EXPECT_GE(elapsed, std::chrono::milliseconds(5));
+    EXPECT_LT(elapsed, std::chrono::milliseconds(200));
+}

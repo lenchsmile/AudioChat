@@ -9,6 +9,8 @@ TEST(AudioChatEngineTest, RejectsUnsupportedFrameDurationBeforeOpeningDevices) {
     const auto result = engine.init();
     ASSERT_TRUE(result.isError());
     EXPECT_FALSE(engine.isRunning());
+    EXPECT_FALSE(engine.hasFatalError());
+    EXPECT_TRUE(engine.getFatalError().empty());
     EXPECT_NO_THROW(engine.stop());
 }
 

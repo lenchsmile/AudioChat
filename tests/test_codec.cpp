@@ -42,7 +42,7 @@ TEST_F(CodecTest, CodecEncodeDecodeRoundTrip) {
     
     EXPECT_NO_THROW({
         codec.encode(original_pcm.data(), encoded.data(), 
-                    encoded.size(), encoded_size);
+                    static_cast<int32_t>(encoded.size()), encoded_size);
     });
     
     EXPECT_GT(encoded_size, 0);
@@ -85,7 +85,7 @@ TEST_F(CodecTest, MultipleFrames) {
         int32_t encoded_size = 0;
         EXPECT_NO_THROW({
             codec.encode(pcm.data(), encoded.data(), 
-                        encoded.size(), encoded_size);
+                        static_cast<int32_t>(encoded.size()), encoded_size);
         });
         EXPECT_GT(encoded_size, 0);
     }
@@ -100,7 +100,7 @@ TEST_F(CodecTest, TenMillisecondFrames) {
     int32_t encoded_size = 0;
     int32_t decoded_size = 0;
 
-    ASSERT_NO_THROW(codec.encode(pcm.data(), encoded.data(), encoded.size(), encoded_size));
+    ASSERT_NO_THROW(codec.encode(pcm.data(), encoded.data(), static_cast<int32_t>(encoded.size()), encoded_size));
     ASSERT_GT(encoded_size, 0);
     ASSERT_NO_THROW(codec.decode(encoded.data(), encoded_size, decoded.data(),
                                  decoded.size(), decoded_size));

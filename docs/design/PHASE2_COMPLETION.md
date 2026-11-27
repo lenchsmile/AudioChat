@@ -1,5 +1,8 @@
 # Phase 2 Completion Report: Audio Processing Enhancement with WebRTC AEC
 
+> **历史报告更正（2026-11-28）**：本文保留了阶段 2 的原始完成声明，其中“生产就绪、零警告、始终可降级”等描述并未经当时实现证实。
+> 当前已验证状态以 `README.md`、`LIMITATIONS.md` 和 `CHANGELOG.md` 为准：真实 AEC、客观 ERLE/双讲验收和严格失败语义现已实现，但仍有本文未覆盖的限制。
+
 **Status**: ✅ **COMPLETE** (100%)  
 **Date**: 2026-11-27  
 **Duration**: Single session (Steps 2.1-2.6)  

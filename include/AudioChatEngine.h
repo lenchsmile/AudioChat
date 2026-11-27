@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AecAudioHandler.h"
 #include "AudioHandler.h"
 #include "Codec.h"
 #include "NetworkHandler.h"
@@ -29,6 +30,14 @@ struct AudioChatConfig {
     bool enable_fec = true;
     bool enable_dtx = false;
     int packet_loss_perc = 10;
+
+    bool enable_aec = false;
+    int aec_suppression_level = 2;
+    bool enable_ns = true;
+    bool enable_agc = true;
+    int reference_delay_ms = 30;
+    int reference_buffer_ms = 128;
+    bool allow_aec_passthrough = false;
 };
 
 class AudioChatEngine {
@@ -45,6 +54,10 @@ public:
     Result<void> start();
     Result<void> stop();
     bool isRunning() const { return running_.load(); }
+    bool isAecActive();
+    std::string getAecStatistics();
+    bool hasFatalError() const;
+    std::string getFatalError() const;
     const AudioChatConfig& getConfig() const { return config_; }
 
 private:
@@ -52,7 +65,7 @@ private:
     Result<void> startThreads();
     Result<void> stopThreads();
     void cleanupResources();
-    void requestStop();
+    void requestStop(const std::string& error);
     void joinThreads();
 
     void sendLoop();
@@ -60,7 +73,7 @@ private:
     void playLoop();
 
     AudioChatConfig config_;
-    std::unique_ptr<AudioHandler> audio_;
+    std::unique_ptr<AudioChat::AecAudioHandler> audio_;
     std::unique_ptr<Codec> codec_;
     std::unique_ptr<NetworkHandler> network_;
 
@@ -73,5 +86,7 @@ private:
 
     std::mutex lifecycle_mutex_;
     std::mutex work_mutex_;
+    mutable std::mutex fatal_error_mutex_;
+    std::string fatal_error_;
     std::condition_variable work_cv_;
 };

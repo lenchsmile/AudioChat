@@ -45,7 +45,7 @@ SOCKET createBoundUdpSocket(int port) {
     return socket_handle;
 }
 
-void sendRaw(SOCKET source, int destination_port, const std::array<uint8_t, 24>& header,
+void sendRaw(SOCKET source, int destination_port, const std::array<uint8_t, kAudioPacketHeaderSize>& header,
              const uint8_t* payload, size_t payload_size) {
     std::array<uint8_t, kAudioPacketHeaderSize + kMaxAudioPacketPayload> wire{};
     std::memcpy(wire.data(), header.data(), header.size());
@@ -62,16 +62,19 @@ void sendRaw(SOCKET source, int destination_port, const std::array<uint8_t, 24>&
     ASSERT_NE(sent, SOCKET_ERROR);
 }
 
-std::array<uint8_t, 24> makeHeader(uint32_t sequence, uint32_t payload_size,
-                                   uint16_t sample_rate = 48000,
-                                   uint16_t channels = 1) {
-    std::array<uint8_t, 24> header{};
+std::array<uint8_t, kAudioPacketHeaderSize> makeHeader(uint32_t sequence, uint32_t payload_size,
+                                                       uint16_t sample_rate = 48000,
+                                                       uint16_t channels = 1,
+                                                       uint16_t frame_duration_ms = 20) {
+    std::array<uint8_t, kAudioPacketHeaderSize> header{};
     writeU32(header.data(), kAudioPacketMagic);
     writeU32(header.data() + 4, sequence);
     writeU64(header.data() + 8, 123456);
     writeU16(header.data() + 16, sample_rate);
     writeU16(header.data() + 18, channels);
-    writeU32(header.data() + 20, payload_size);
+    writeU16(header.data() + 20, frame_duration_ms);
+    writeU16(header.data() + 22, 0);
+    writeU32(header.data() + 24, payload_size);
     return header;
 }
 
@@ -115,13 +118,16 @@ TEST_F(NetworkHandlerTest, RejectsMalformedWirePacketsAndAcceptsValidPacket) {
     sendRaw(source, 39202, makeHeader(2, 3, 44100, 1), payload.data(), payload.size());
     EXPECT_FALSE(receiver.receive());
 
-    sendRaw(source, 39202, makeHeader(3, 3, 48000, 3), payload.data(), payload.size());
+    sendRaw(source, 39202, makeHeader(3, 3, 16000, 1), payload.data(), payload.size());
     EXPECT_FALSE(receiver.receive());
 
-    sendRaw(source, 39202, makeHeader(4, kMaxAudioPacketPayload + 1), payload.data(), payload.size());
+    sendRaw(source, 39202, makeHeader(4, 3, 48000, 3), payload.data(), payload.size());
     EXPECT_FALSE(receiver.receive());
 
-    sendRaw(source, 39202, makeHeader(5, 3), payload.data(), payload.size());
+    sendRaw(source, 39202, makeHeader(5, kMaxAudioPacketPayload + 1), payload.data(), payload.size());
+    EXPECT_FALSE(receiver.receive());
+
+    sendRaw(source, 39202, makeHeader(6, 3), payload.data(), payload.size());
     bool received = false;
     for (int attempt = 0; attempt < 20 && !received; ++attempt) {
         received = receiver.receive();
@@ -138,6 +144,30 @@ TEST_F(NetworkHandlerTest, RejectsMalformedWirePacketsAndAcceptsValidPacket) {
     EXPECT_EQ(output[0], 10);
     EXPECT_EQ(output[1], 20);
     EXPECT_EQ(output[2], 30);
+
+    closesocket(source);
+}
+
+TEST_F(NetworkHandlerTest, RejectsMismatchedFrameDuration) {
+    NetworkHandler receiver("127.0.0.1", "127.0.0.1", 39222, 39223,
+                            48000, 1, 20);
+    SOCKET source = createBoundUdpSocket(39223);
+
+    Packet outgoing;
+    outgoing.frame_duration_ms = 10;
+    EXPECT_FALSE(receiver.send(outgoing));
+
+    const std::array<uint8_t, 3> payload{10, 20, 30};
+    sendRaw(source, 39222, makeHeader(1, static_cast<uint32_t>(payload.size()), 48000, 1, 10),
+            payload.data(), payload.size());
+    EXPECT_FALSE(receiver.receive());
+
+    std::array<uint8_t, 16> output{};
+    int32_t output_size = -1;
+    const auto result = receiver.getJitterBufferPacketWithTimeout(
+        output.data(), output.size(), output_size, 10);
+    EXPECT_EQ(result, JitterBuffer::Result::Timeout);
+    EXPECT_EQ(output_size, 0);
 
     closesocket(source);
 }

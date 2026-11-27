@@ -7,6 +7,7 @@ add_executable(AudioChatTests
     test_audiochat_engine.cpp
     test_config_manager.cpp
     test_aec_processor.cpp
+    test_aec_effect.cpp
     test_reference_signal_buffer.cpp
     test_aec_audio_handler.cpp
     test_codec_optimizer.cpp

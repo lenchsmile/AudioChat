@@ -206,7 +206,7 @@ void ConfigManager::applyPresetLowLatency() {
     config_.audio.frame_duration_ms = 10;      // Shorter frames
     config_.codec.bitrate = 24000;             // Lower bitrate
     config_.codec.complexity = 3;              // Lower complexity
-    config_.aec.suppression_level = 1;         // Moderate AEC
+    config_.aec.suppression_level = 1;         // Reserved compatibility value
     config_.jitter_buffer.min_packets = 1;     // Minimal buffering
     config_.jitter_buffer.max_packets = 3;
     config_.reliability.congestion_loss_threshold = 10.0;  // Higher threshold
@@ -225,8 +225,8 @@ void ConfigManager::applyPresetHighQuality() {
     config_.codec.bitrate = 64000;             // Higher bitrate
     config_.codec.complexity = 10;             // Maximum complexity
     config_.codec.enable_vbr = true;           // Variable bitrate
-    config_.aec.suppression_level = 2;         // High AEC
-    config_.aec.filter_length_ms = 256;        // Longer filter
+    config_.aec.suppression_level = 2;         // Reserved compatibility value
+    config_.aec.filter_length_ms = 256;        // Larger reference buffer
     config_.jitter_buffer.min_packets = 3;     // More buffering
     config_.jitter_buffer.max_packets = 15;
     config_.jitter_buffer.adaptive = true;

@@ -1,6 +1,7 @@
 #include "JitterBuffer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iterator>
 #include <utility>
@@ -53,15 +54,28 @@ bool JitterBuffer::addPacket(Packet packet) {
 }
 
 bool JitterBuffer::getPacket(uint8_t* destination, size_t capacity, int32_t& out_size) {
+    return getPacketWithTimeout(destination, capacity, out_size, -1) == Result::Packet;
+}
+
+JitterBuffer::Result JitterBuffer::getPacketWithTimeout(uint8_t* destination, size_t capacity,
+                                                        int32_t& out_size, int timeout_ms) {
     out_size = 0;
     if (!destination) {
-        return false;
+        return Result::InvalidDestination;
     }
 
     std::unique_lock<std::mutex> lock(mutex_);
-    cv_.wait(lock, [this] { return stopped_ || !buffer_.empty(); });
+    if (timeout_ms < 0) {
+        cv_.wait(lock, [this] { return stopped_ || !buffer_.empty(); });
+    } else {
+        cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                     [this] { return stopped_ || !buffer_.empty(); });
+    }
     if (stopped_) {
-        return false;
+        return Result::Stopped;
+    }
+    if (buffer_.empty()) {
+        return Result::Timeout;
     }
 
     while (!buffer_.empty()) {
@@ -96,10 +110,10 @@ bool JitterBuffer::getPacket(uint8_t* destination, size_t capacity, int32_t& out
                         static_cast<size_t>(packet.data_size));
         }
         out_size = packet.data_size;
-        return true;
+        return Result::Packet;
     }
 
-    return false;
+    return Result::Timeout;
 }
 
 void JitterBuffer::stop() {

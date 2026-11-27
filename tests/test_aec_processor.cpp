@@ -134,6 +134,17 @@ TEST_F(AecProcessorTest, ValidateSuppressionLevels) {
     }
 }
 
+TEST_F(AecProcessorTest, ValidateStreamDelay) {
+    AecConfig config;
+    config.stream_delay_ms = 64;
+    EXPECT_TRUE(config.Validate().isOk());
+
+    config.stream_delay_ms = -1;
+    EXPECT_TRUE(config.Validate().isError());
+    config.stream_delay_ms = 501;
+    EXPECT_TRUE(config.Validate().isError());
+}
+
 TEST_F(AecProcessorTest, ValidateFullConfig) {
     AecConfig config;
     config.sample_rate_hz = 48000;
@@ -188,6 +199,16 @@ TEST_F(AecProcessorTest, ConfigurationDefaults) {
     EXPECT_FALSE(config.enable_vad);
     EXPECT_EQ(config.aec_suppression_level, 2);
     EXPECT_EQ(config.ns_level, 1);
+}
+
+TEST_F(AecProcessorTest, BackendStatusMatchesBuild) {
+    auto processor = AecProcessor::Create(AecConfig{});
+    ASSERT_TRUE(processor.isOk());
+#ifdef HAS_WEBRTC_AEC
+    EXPECT_TRUE(processor.value()->IsBackendActive());
+#else
+    EXPECT_FALSE(processor.value()->IsBackendActive());
+#endif
 }
 
 // ============================================================================

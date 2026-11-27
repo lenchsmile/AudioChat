@@ -1,5 +1,6 @@
 #include "AudioChatEngine.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -54,10 +55,41 @@ Result<void> AudioChatEngine::initComponents() {
 
     try {
         const int samples = config_.sample_rate * config_.frame_duration_ms / 1000;
-        audio_ = std::make_unique<AudioHandler>(
+        auto raw_audio = std::make_unique<AudioHandler>(
             config_.sample_rate, config_.sample_rate, samples, samples,
             config_.input_device.empty() ? "auto" : config_.input_device.c_str(),
-            config_.output_device.empty() ? "auto" : config_.output_device.c_str());
+            config_.output_device.empty() ? "auto" : config_.output_device.c_str(),
+            nullptr, false);
+
+        AudioChat::AecConfig aec_config;
+        aec_config.sample_rate_hz = config_.sample_rate;
+        aec_config.num_channels = 1;
+        aec_config.frame_duration_ms = config_.frame_duration_ms;
+        aec_config.enable_aec = config_.enable_aec;
+        aec_config.aec_suppression_level = config_.aec_suppression_level;
+        aec_config.enable_ns = config_.enable_ns;
+        aec_config.enable_agc = config_.enable_agc;
+
+        AudioChat::ReferenceSignalBuffer::Config reference_config;
+        reference_config.sample_rate_hz = config_.sample_rate;
+        reference_config.num_channels = 1;
+        reference_config.frame_duration_ms = config_.frame_duration_ms;
+        reference_config.delay_ms = config_.reference_delay_ms;
+        reference_config.buffer_duration_ms =
+            std::max(config_.reference_buffer_ms, config_.reference_delay_ms + 100);
+
+        AudioChat::AecAudioHandler::Config pipeline_config;
+        pipeline_config.enable_aec = config_.enable_aec;
+        pipeline_config.allow_passthrough_on_error = config_.allow_aec_passthrough;
+        pipeline_config.aec_config = aec_config;
+        pipeline_config.buffer_config = reference_config;
+
+        auto pipeline = AudioChat::AecAudioHandler::Create(
+            std::move(raw_audio), pipeline_config);
+        if (pipeline.isError()) {
+            return Result<void>::error(pipeline.error(), pipeline.message());
+        }
+        audio_ = std::move(pipeline.value());
 
         codec_ = std::make_unique<Codec>(config_.sample_rate, 1, config_.frame_duration_ms);
 
@@ -91,7 +123,9 @@ Result<void> AudioChatEngine::initComponents() {
 
         network_ = std::make_unique<NetworkHandler>(
             config_.local_ip.c_str(), config_.remote_ip.c_str(),
-            config_.local_port, config_.remote_port);
+            config_.local_port, config_.remote_port,
+            static_cast<uint16_t>(config_.sample_rate), 1,
+            static_cast<uint16_t>(config_.frame_duration_ms));
         return Result<void>::ok();
     } catch (const std::exception& error) {
         return Result<void>::error(AudioChatError::InternalError, error.what());
@@ -106,6 +140,19 @@ Result<void> AudioChatEngine::start() {
     }
     if (running_.load()) {
         return Result<void>::ok();
+    }
+
+    try {
+        if (audio_) {
+            auto* raw_audio = audio_->GetAudioHandler();
+            raw_audio->start();
+            raw_audio->discardCaptureFrames();
+        }
+    } catch (const std::exception& error) {
+        cleanupResources();
+        initialized_ = false;
+        return Result<void>::error(AudioChatError::InternalError,
+                                   std::string("Failed to start audio devices: ") + error.what());
     }
 
     running_ = true;
@@ -152,7 +199,7 @@ Result<void> AudioChatEngine::stop() {
         network_->stop();
     }
     if (audio_) {
-        audio_->stop();
+        audio_->GetAudioHandler()->stop();
     }
     work_cv_.notify_all();
     joinThreads();
@@ -168,11 +215,21 @@ Result<void> AudioChatEngine::stopThreads() {
         network_->stop();
     }
     if (audio_) {
-        audio_->stop();
+        audio_->GetAudioHandler()->stop();
     }
     work_cv_.notify_all();
     joinThreads();
     return Result<void>::ok();
+}
+
+bool AudioChatEngine::isAecActive() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    return audio_ && audio_->IsAecEnabled();
+}
+
+std::string AudioChatEngine::getAecStatistics() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    return audio_ ? audio_->GetAecStatistics() : "AEC pipeline not initialized";
 }
 
 void AudioChatEngine::joinThreads() {
@@ -187,13 +244,29 @@ void AudioChatEngine::joinThreads() {
     }
 }
 
-void AudioChatEngine::requestStop() {
+bool AudioChatEngine::hasFatalError() const {
+    std::lock_guard<std::mutex> lock(fatal_error_mutex_);
+    return !fatal_error_.empty();
+}
+
+std::string AudioChatEngine::getFatalError() const {
+    std::lock_guard<std::mutex> lock(fatal_error_mutex_);
+    return fatal_error_;
+}
+
+void AudioChatEngine::requestStop(const std::string& error) {
+    {
+        std::lock_guard<std::mutex> lock(fatal_error_mutex_);
+        if (fatal_error_.empty()) {
+            fatal_error_ = error;
+        }
+    }
     running_ = false;
     if (network_) {
         network_->stop();
     }
     if (audio_) {
-        audio_->stop();
+        audio_->GetAudioHandler()->stop();
     }
     work_cv_.notify_all();
 }
@@ -201,23 +274,52 @@ void AudioChatEngine::requestStop() {
 void AudioChatEngine::sendLoop() {
     const int samples = codec_->getFramesPerBuffer();
     std::vector<int16_t> capture(static_cast<size_t>(samples));
+    std::vector<int16_t> processed(static_cast<size_t>(samples));
     Packet packet;
     packet.sample_rate = static_cast<uint16_t>(config_.sample_rate);
     packet.channels = 1;
+    packet.frame_duration_ms = static_cast<uint16_t>(config_.frame_duration_ms);
+    const auto frame_period = std::chrono::milliseconds(config_.frame_duration_ms);
+    auto next_deadline = std::chrono::steady_clock::now();
 
     while (running_.load()) {
         try {
-            if (audio_->readCaptureFrame(capture.data(), capture.size())) {
-                codec_->encode(capture.data(), packet.payload.data(),
+            if (audio_->GetAudioHandler()->readLatestCaptureFrame(capture.data(), capture.size())) {
+                auto capture_result = audio_->ProcessCaptureSignal(
+                    capture.data(), samples, processed.data());
+                for (int retry = 0;
+                     capture_result.isError() &&
+                     capture_result.error() == AudioChatError::BufferUnderflow &&
+                     retry < config_.frame_duration_ms &&
+                     running_.load();
+                     ++retry) {
+                    std::unique_lock<std::mutex> lock(work_mutex_);
+                    work_cv_.wait_for(lock, 1ms, [this] { return !running_.load(); });
+                    capture_result = audio_->ProcessCaptureSignal(
+                        capture.data(), samples, processed.data());
+                }
+                if (capture_result.isError()) {
+                    throw std::runtime_error("AEC capture processing failed: " +
+                                             capture_result.message());
+                }
+                codec_->encode(processed.data(), packet.payload.data(),
                                static_cast<int32_t>(packet.payload.size()), packet.data_size);
                 if (packet.data_size > 0) {
                     network_->send(packet);
                 }
+                next_deadline += frame_period;
+                const auto now = std::chrono::steady_clock::now();
+                if (next_deadline <= now) {
+                    next_deadline = now + frame_period;
+                }
+                std::unique_lock<std::mutex> lock(work_mutex_);
+                work_cv_.wait_until(lock, next_deadline,
+                                    [this] { return !running_.load(); });
                 continue;
             }
         } catch (const std::exception& error) {
             LOG_ERROR("Send loop error: {}", error.what());
-            requestStop();
+            requestStop("Send loop error: " + std::string(error.what()));
             break;
         }
 
@@ -234,7 +336,7 @@ void AudioChatEngine::recvLoop() {
             }
         } catch (const std::exception& error) {
             LOG_ERROR("Receive loop error: {}", error.what());
-            requestStop();
+            requestStop("Receive loop error: " + std::string(error.what()));
             break;
         }
 
@@ -247,25 +349,68 @@ void AudioChatEngine::playLoop() {
     const int samples = codec_->getFramesPerBuffer();
     std::array<uint8_t, kMaxAudioPacketPayload> encoded{};
     std::vector<int16_t> decoded(static_cast<size_t>(samples));
+    const auto frame_period = std::chrono::milliseconds(config_.frame_duration_ms);
+    auto next_deadline = std::chrono::steady_clock::now() + frame_period;
 
     while (running_.load()) {
         try {
-            int32_t encoded_size = 0;
-            if (!network_->getJitterBufferPacket(encoded.data(), encoded.size(), encoded_size)) {
-                break;
+            const auto now = std::chrono::steady_clock::now();
+            int timeout_ms = 0;
+            if (next_deadline > now) {
+                timeout_ms = std::max(
+                    1, static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                           next_deadline - now).count()));
             }
-            if (encoded_size <= 0) {
-                continue;
+
+            int32_t encoded_size = 0;
+            const auto packet_result = network_->getJitterBufferPacketWithTimeout(
+                encoded.data(), encoded.size(), encoded_size, timeout_ms);
+            if (packet_result == JitterBuffer::Result::Stopped) {
+                break;
             }
 
             int32_t decoded_size = 0;
-            codec_->decode(encoded.data(), encoded_size, decoded.data(), samples, decoded_size);
+            if (packet_result == JitterBuffer::Result::Timeout ||
+                (packet_result == JitterBuffer::Result::Packet && encoded_size == 0)) {
+                std::fill(decoded.begin(), decoded.end(), 0);
+                decoded_size = samples;
+            } else if (packet_result == JitterBuffer::Result::Packet) {
+                codec_->decode(encoded.data(), encoded_size, decoded.data(), samples, decoded_size);
+            } else {
+                throw std::runtime_error("Invalid jitter buffer destination");
+            }
+
+            if (decoded_size != samples) {
+                LOG_WARN("Decoded frame size {} does not match local frame size {}; resynchronizing",
+                         decoded_size, samples);
+                if (config_.enable_aec && audio_->IsAecEnabled()) {
+                    auto reset = audio_->ResetAec();
+                    if (reset.isError()) {
+                        throw std::runtime_error("AEC resynchronization failed: " + reset.message());
+                    }
+                }
+                std::fill(decoded.begin(), decoded.end(), 0);
+                decoded_size = samples;
+            }
+
             if (decoded_size > 0) {
-                audio_->play(decoded.data(), decoded_size);
+                auto reference_result = audio_->ProcessReferenceSignal(
+                    decoded.data(), decoded_size);
+                if (reference_result.isError()) {
+                    throw std::runtime_error("AEC reference processing failed: " +
+                                             reference_result.message());
+                }
+                audio_->GetAudioHandler()->play(decoded.data(), decoded_size);
+            }
+
+            next_deadline += frame_period;
+            const auto after_playback = std::chrono::steady_clock::now();
+            if (next_deadline <= after_playback) {
+                next_deadline = after_playback + frame_period;
             }
         } catch (const std::exception& error) {
             LOG_ERROR("Playback loop error: {}", error.what());
-            requestStop();
+            requestStop("Playback loop error: " + std::string(error.what()));
             break;
         }
     }
@@ -273,7 +418,7 @@ void AudioChatEngine::playLoop() {
 
 void AudioChatEngine::cleanupResources() {
     if (audio_) {
-        audio_->stop();
+        audio_->GetAudioHandler()->stop();
         audio_.reset();
     }
     codec_.reset();

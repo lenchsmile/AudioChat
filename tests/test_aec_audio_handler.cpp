@@ -9,34 +9,6 @@
 using namespace AudioChat;
 
 /**
- * @brief Mock AudioHandler for testing (minimal implementation)
- * 
- * Since the real AudioHandler requires PortAudio and hardware,
- * we use this mock for testing the AecAudioHandler wrapper.
- */
-class MockAudioHandler {
-public:
-    MockAudioHandler() = default;
-    ~MockAudioHandler() = default;
-
-    void play(const int16_t* data, int32_t data_size) {
-        // Mock implementation
-    }
-
-    void startRecordeAudio() {
-        // Mock implementation
-    }
-
-    void stopRecordeAudio() {
-        // Mock implementation
-    }
-
-    bool isRecording() {
-        return false;
-    }
-};
-
-/**
  * @brief Unit tests for AecAudioHandler integration
  * 
  * Tests verify:
@@ -100,6 +72,9 @@ TEST_F(AecAudioHandlerTest, ValidateConfigWithAecDisabled) {
     auto config = CreateDefaultConfig(false);
     auto result = config.Validate();
     EXPECT_TRUE(result.isOk()) << "Config with AEC disabled should pass";
+
+    config.aec_config.num_channels = 0;
+    EXPECT_TRUE(config.Validate().isError());
 }
 
 TEST_F(AecAudioHandlerTest, ValidateConfigMismatchedSampleRates) {
@@ -131,7 +106,23 @@ TEST_F(AecAudioHandlerTest, ValidateConfigInvalidAecConfig) {
 TEST_F(AecAudioHandlerTest, ValidateConfigInvalidBufferConfig) {
     auto config = CreateDefaultConfig(true);
     config.buffer_config.delay_ms = 150;  // 150 >= 100 buffer size
-    
+
+    auto result = config.Validate();
+    EXPECT_TRUE(result.isError());
+}
+
+TEST_F(AecAudioHandlerTest, ValidateConfigMismatchedFrameDurations) {
+    auto config = CreateDefaultConfig(true);
+    config.buffer_config.frame_duration_ms = 20;
+
+    auto result = config.Validate();
+    EXPECT_TRUE(result.isError());
+}
+
+TEST_F(AecAudioHandlerTest, ValidateConfigRejectsDisabledProcessorAec) {
+    auto config = CreateDefaultConfig(true);
+    config.aec_config.enable_aec = false;
+
     auto result = config.Validate();
     EXPECT_TRUE(result.isError());
 }
@@ -331,13 +322,75 @@ TEST_F(AecAudioHandlerTest, InteroperabilityWithOriginalAudio) {
 // Error Recovery Tests
 // ============================================================================
 
-TEST_F(AecAudioHandlerTest, GracefulDegradation) {
-    // If reference buffer has insufficient data,
-    // should return original audio (not error)
-    auto config = CreateDefaultConfig(true);
-    auto result = config.Validate();
-    EXPECT_TRUE(result.isOk());
+TEST_F(AecAudioHandlerTest, HeadlessDisabledPipelinePassesThrough) {
+    auto config = CreateDefaultConfig(false);
+    auto handler = AecAudioHandler::CreateHeadless(config);
+    ASSERT_TRUE(handler.isOk()) << handler.message();
+    EXPECT_EQ(handler.value()->GetAudioHandler(), nullptr);
+
+    const std::vector<int16_t> input(480, 1234);
+    std::vector<int16_t> output(input.size(), 0);
+    auto result = handler.value()->ProcessCaptureSignal(
+        input.data(), static_cast<int32_t>(input.size()), output.data());
+    ASSERT_TRUE(result.isOk()) << result.message();
+    EXPECT_EQ(output, input);
 }
+
+#ifdef HAS_WEBRTC_AEC
+TEST_F(AecAudioHandlerTest, StrictUnderflowReturnsError) {
+    auto config = CreateDefaultConfig(true);
+    auto handler = AecAudioHandler::CreateHeadless(config);
+    ASSERT_TRUE(handler.isOk()) << handler.message();
+
+    const std::vector<int16_t> input(480, 100);
+    std::vector<int16_t> output(input.size(), 0);
+    auto first = handler.value()->ProcessCaptureSignal(
+        input.data(), static_cast<int32_t>(input.size()), output.data());
+    ASSERT_TRUE(first.isOk()) << first.message();
+
+    auto result = handler.value()->ProcessCaptureSignal(
+        input.data(), static_cast<int32_t>(input.size()), output.data());
+    EXPECT_TRUE(result.isError());
+    EXPECT_EQ(result.error(), AudioChatError::BufferUnderflow);
+}
+
+TEST_F(AecAudioHandlerTest, ExplicitPassthroughReturnsOriginalAudioOnUnderflow) {
+    auto config = CreateDefaultConfig(true);
+    config.allow_passthrough_on_error = true;
+    auto handler = AecAudioHandler::CreateHeadless(config);
+    ASSERT_TRUE(handler.isOk()) << handler.message();
+
+    const std::vector<int16_t> input(480, 1234);
+    std::vector<int16_t> output(input.size(), 0);
+    auto first = handler.value()->ProcessCaptureSignal(
+        input.data(), static_cast<int32_t>(input.size()), output.data());
+    ASSERT_TRUE(first.isOk()) << first.message();
+
+    auto result = handler.value()->ProcessCaptureSignal(
+        input.data(), static_cast<int32_t>(input.size()), output.data());
+    ASSERT_TRUE(result.isOk()) << result.message();
+    EXPECT_EQ(output, input);
+}
+#else
+TEST_F(AecAudioHandlerTest, MissingBackendIsStrictUnlessPassthroughWasRequested) {
+    auto config = CreateDefaultConfig(true);
+    auto strict = AecAudioHandler::CreateHeadless(config);
+    EXPECT_TRUE(strict.isError());
+    EXPECT_EQ(strict.error(), AudioChatError::AecInitFailed);
+
+    config.allow_passthrough_on_error = true;
+    auto degraded = AecAudioHandler::CreateHeadless(config);
+    ASSERT_TRUE(degraded.isOk()) << degraded.message();
+    EXPECT_FALSE(degraded.value()->IsAecEnabled());
+
+    const std::vector<int16_t> input(480, 1234);
+    std::vector<int16_t> output(input.size(), 0);
+    auto result = degraded.value()->ProcessCaptureSignal(
+        input.data(), static_cast<int32_t>(input.size()), output.data());
+    ASSERT_TRUE(result.isOk()) << result.message();
+    EXPECT_EQ(output, input);
+}
+#endif
 
 TEST_F(AecAudioHandlerTest, ConfigRecovery) {
     // Can reconfigure after initialization
