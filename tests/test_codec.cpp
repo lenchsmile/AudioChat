@@ -54,7 +54,7 @@ TEST_F(CodecTest, CodecEncodeDecodeRoundTrip) {
     
     EXPECT_NO_THROW({
         codec.decode(encoded.data(), encoded_size, decoded_pcm.data(),
-                    decoded_pcm.size() * sizeof(int16_t), decoded_size);
+                    decoded_pcm.size(), decoded_size);
     });
     
     EXPECT_GT(decoded_size, 0);
@@ -89,4 +89,21 @@ TEST_F(CodecTest, MultipleFrames) {
         });
         EXPECT_GT(encoded_size, 0);
     }
+}
+
+TEST_F(CodecTest, TenMillisecondFrames) {
+    Codec codec(SAMPLE_RATE, CHANNELS, 10);
+    const int samples = SAMPLE_RATE / 100;
+    std::vector<int16_t> pcm(samples, 100);
+    std::vector<uint8_t> encoded(samples * 2);
+    std::vector<int16_t> decoded(samples);
+    int32_t encoded_size = 0;
+    int32_t decoded_size = 0;
+
+    ASSERT_NO_THROW(codec.encode(pcm.data(), encoded.data(), encoded.size(), encoded_size));
+    ASSERT_GT(encoded_size, 0);
+    ASSERT_NO_THROW(codec.decode(encoded.data(), encoded_size, decoded.data(),
+                                 decoded.size(), decoded_size));
+    EXPECT_EQ(decoded_size, samples);
+    EXPECT_EQ(codec.getFramesPerBuffer(), samples);
 }

@@ -60,25 +60,25 @@
       "name": "clang-debug",
       "configurePreset": "clang-debug",
       "displayName": "Clang Debug Build",
-      "targets": ["AudioChat"]
+      "targets": ["AudioChat", "AudioChatTests"]
     },
     {
       "name": "clang-release",
       "configurePreset": "clang-release",
       "displayName": "Clang Release Build",
-      "targets": ["AudioChat"]
+      "targets": ["AudioChat", "AudioChatTests"]
     },
     {
       "name": "msvc-debug",
       "configurePreset": "msvc-debug",
       "displayName": "MSVC Debug Build",
-      "targets": ["AudioChat"]
+      "targets": ["AudioChat", "AudioChatTests"]
     },
     {
       "name": "msvc-release",
       "configurePreset": "msvc-release",
       "displayName": "MSVC Release Build",
-      "targets": ["AudioChat"]
+      "targets": ["AudioChat", "AudioChatTests"]
     }
   ],
   "testPresets": [

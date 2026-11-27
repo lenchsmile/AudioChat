@@ -1,276 +1,208 @@
 #include "ReferenceSignalBuffer.h"
 #include "Logger.h"
+
 #include <algorithm>
+#include <limits>
 #include <sstream>
 
 namespace AudioChat {
 
-// ============================================================================
-// Config Implementation
-// ============================================================================
-
 Result<void> ReferenceSignalBuffer::Config::Validate() const {
-    // Validate sample rate
-    if (sample_rate_hz != 8000 && sample_rate_hz != 16000 && 
+    if (sample_rate_hz != 8000 && sample_rate_hz != 16000 &&
         sample_rate_hz != 32000 && sample_rate_hz != 48000) {
-        return Result<void>::error(
-            AudioChatError::InvalidCodecConfig,
-            "Invalid sample rate: " + std::to_string(sample_rate_hz)
-        );
+        return Result<void>::error(AudioChatError::InvalidCodecConfig,
+                                   "Invalid sample rate: " + std::to_string(sample_rate_hz));
     }
-
-    // Validate channels
     if (num_channels < 1 || num_channels > 2) {
-        return Result<void>::error(
-            AudioChatError::InvalidCodecConfig,
-            "Invalid number of channels: " + std::to_string(num_channels)
-        );
+        return Result<void>::error(AudioChatError::InvalidCodecConfig,
+                                   "Invalid channel count: " + std::to_string(num_channels));
     }
-
-    // Validate frame duration
     if (frame_duration_ms != 10 && frame_duration_ms != 20) {
-        return Result<void>::error(
-            AudioChatError::InvalidCodecConfig,
-            "Invalid frame duration: " + std::to_string(frame_duration_ms) + " ms"
-        );
+        return Result<void>::error(AudioChatError::InvalidCodecConfig,
+                                   "Invalid frame duration: " + std::to_string(frame_duration_ms));
     }
-
-    // Validate delay
     if (delay_ms < 0 || delay_ms > 200) {
-        return Result<void>::error(
-            AudioChatError::InvalidArgument,
-            "Invalid delay: " + std::to_string(delay_ms) + 
-            " ms (must be 0-200ms)"
-        );
+        return Result<void>::error(AudioChatError::InvalidArgument,
+                                   "Invalid delay: " + std::to_string(delay_ms));
     }
-
-    // Validate buffer duration
     if (buffer_duration_ms < 100 || buffer_duration_ms > 500) {
-        return Result<void>::error(
-            AudioChatError::InvalidArgument,
-            "Invalid buffer duration: " + std::to_string(buffer_duration_ms) + 
-            " ms (must be 100-500ms)"
-        );
+        return Result<void>::error(AudioChatError::InvalidArgument,
+                                   "Invalid buffer duration: " + std::to_string(buffer_duration_ms));
     }
-
-    // Buffer must be larger than delay
     if (buffer_duration_ms <= delay_ms) {
         return Result<void>::error(
             AudioChatError::InvalidArgument,
-            "Buffer duration (" + std::to_string(buffer_duration_ms) + 
-            "ms) must be greater than delay (" + std::to_string(delay_ms) + "ms)"
-        );
+            "Buffer duration must be greater than delay");
     }
-
     return Result<void>::ok();
 }
 
-// ============================================================================
-// ReferenceSignalBuffer Implementation
-// ============================================================================
-
-Result<std::unique_ptr<ReferenceSignalBuffer>> ReferenceSignalBuffer::Create(
-    const Config& config) {
-    
-    // Validate config
-    auto validation_result = config.Validate();
-    if (validation_result.isError()) {
-        LOG_ERROR("ReferenceSignalBuffer::Create: Config validation failed - {}", 
-                  validation_result.message());
+Result<std::unique_ptr<ReferenceSignalBuffer>> ReferenceSignalBuffer::Create(const Config& config) {
+    const auto validation = config.Validate();
+    if (validation.isError()) {
         return Result<std::unique_ptr<ReferenceSignalBuffer>>::error(
-            validation_result.error(),
-            validation_result.message()
-        );
+            validation.error(), validation.message());
     }
 
-    // Create buffer instance
-    auto buffer = std::unique_ptr<ReferenceSignalBuffer>(
-        new ReferenceSignalBuffer(config)
-    );
-
-    // Initialize
-    auto init_result = buffer->Initialize();
-    if (init_result.isError()) {
-        LOG_ERROR("ReferenceSignalBuffer::Create: Initialization failed - {}", 
-                  init_result.message());
+    auto buffer = std::unique_ptr<ReferenceSignalBuffer>(new ReferenceSignalBuffer(config));
+    const auto initialized = buffer->Initialize();
+    if (initialized.isError()) {
         return Result<std::unique_ptr<ReferenceSignalBuffer>>::error(
-            init_result.error(),
-            init_result.message()
-        );
+            initialized.error(), initialized.message());
     }
-
-    return Result<std::unique_ptr<ReferenceSignalBuffer>>::ok(buffer.release());
+    return Result<std::unique_ptr<ReferenceSignalBuffer>>::ok(std::move(buffer));
 }
 
-ReferenceSignalBuffer::ReferenceSignalBuffer(const Config& config)
-    : config_(config) {
+ReferenceSignalBuffer::ReferenceSignalBuffer(const Config& config) : config_(config) {
     LOG_INFO("ReferenceSignalBuffer created: {}Hz, {} channels, {}ms delay, {}ms buffer",
-             config.sample_rate_hz, config.num_channels, config.delay_ms, 
-             config.buffer_duration_ms);
+             config_.sample_rate_hz, config_.num_channels, config_.delay_ms,
+             config_.buffer_duration_ms);
 }
 
 Result<void> ReferenceSignalBuffer::Initialize() {
-    int32_t max_samples = GetMaxBufferSamples();
-    
-    try {
-        // Pre-allocate buffer with maximum size
-        buffer_.reserve(max_samples * config_.num_channels);
-        is_initialized_ = true;
-        LOG_INFO("ReferenceSignalBuffer initialized: {} samples total capacity",
-                 max_samples * config_.num_channels);
-        return Result<void>::ok();
-    } catch (const std::exception& e) {
-        LOG_ERROR("ReferenceSignalBuffer::Initialize failed: {}", e.what());
-        return Result<void>::error(
-            AudioChatError::BufferAllocFailed,
-            std::string("Failed to allocate buffer: ") + e.what()
-        );
-    }
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
+    buffer_.clear();
+    buffer_start_sample_ = 0;
+    total_pushed_samples_ = 0;
+    next_read_sample_ = 0;
+    last_push_timestamp_ms_ = 0;
+    is_initialized_ = true;
+    LOG_INFO("ReferenceSignalBuffer initialized: {} interleaved samples capacity",
+             GetMaxBufferSamples());
+    return Result<void>::ok();
 }
 
 int32_t ReferenceSignalBuffer::GetDelaySamples() const {
-    // delay_samples = sample_rate * delay_ms / 1000
     return (config_.sample_rate_hz * config_.delay_ms) / 1000;
 }
 
 int32_t ReferenceSignalBuffer::GetMaxBufferSamples() const {
-    // max_buffer = sample_rate * buffer_duration_ms / 1000 * num_channels
-    return (config_.sample_rate_hz * config_.buffer_duration_ms / 1000) * 
-           config_.num_channels;
+    return (config_.sample_rate_hz * config_.buffer_duration_ms / 1000) * config_.num_channels;
 }
 
-Result<void> ReferenceSignalBuffer::PushReferenceSignal(
-    const int16_t* data, int32_t num_samples) {
-    
+Result<void> ReferenceSignalBuffer::PushReferenceSignal(const int16_t* data, int32_t num_samples) {
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
     if (!is_initialized_) {
-        return Result<void>::error(
-            AudioChatError::NotInitialized,
-            "Reference signal buffer not initialized"
-        );
+        return Result<void>::error(AudioChatError::NotInitialized,
+                                   "Reference signal buffer not initialized");
+    }
+    if (!data || num_samples <= 0) {
+        return Result<void>::error(AudioChatError::InvalidArgument,
+                                   "Invalid reference signal");
+    }
+    if (num_samples > std::numeric_limits<int32_t>::max() / config_.num_channels) {
+        return Result<void>::error(AudioChatError::BufferOverflow,
+                                   "Reference signal is too large");
     }
 
-    if (data == nullptr) {
-        return Result<void>::error(
-            AudioChatError::InvalidArgument,
-            "Data pointer is null"
-        );
-    }
+    const size_t interleaved_samples = static_cast<size_t>(num_samples) * config_.num_channels;
+    buffer_.insert(buffer_.end(), data, data + interleaved_samples);
+    total_pushed_samples_ += static_cast<uint64_t>(num_samples);
+    last_push_timestamp_ms_ = total_pushed_samples_ * 1000ULL / config_.sample_rate_hz;
+    ++frames_pushed_;
 
-    if (num_samples <= 0) {
-        return Result<void>::error(
-            AudioChatError::InvalidArgument,
-            "Invalid number of samples: " + std::to_string(num_samples)
-        );
-    }
-
-    int32_t samples_to_add = num_samples * config_.num_channels;
-    int32_t max_samples = GetMaxBufferSamples();
-
-    // Check for buffer overflow
-    if (static_cast<int32_t>(buffer_.size()) + samples_to_add > max_samples) {
-        LOG_WARN("Reference signal buffer overflow: current={}, adding={}, max={}",
-                 buffer_.size(), samples_to_add, max_samples);
-        // Remove oldest data to make room (FIFO overflow behavior)
-        int32_t remove_count = (buffer_.size() + samples_to_add) - max_samples;
-        for (int32_t i = 0; i < remove_count && !buffer_.empty(); ++i) {
+    const size_t maximum = static_cast<size_t>(GetMaxBufferSamples());
+    while (buffer_.size() > maximum) {
+        for (int channel = 0; channel < config_.num_channels; ++channel) {
             buffer_.pop_front();
         }
+        ++buffer_start_sample_;
     }
-
-    // Add new samples to buffer
-    buffer_.insert(buffer_.end(), data, data + samples_to_add);
-    
-    frames_pushed_++;
-    last_push_timestamp_ms_ = 0;  // Would be set by caller if needed
-
+    next_read_sample_ = std::max(next_read_sample_, buffer_start_sample_);
     return Result<void>::ok();
 }
 
 Result<ReferenceSignalBuffer::ReferenceFrame> ReferenceSignalBuffer::GetDelayedReference(
     int32_t num_samples) {
-    
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
     if (!is_initialized_) {
-        return Result<ReferenceFrame>::error(
-            AudioChatError::NotInitialized,
-            "Reference signal buffer not initialized"
-        );
+        return Result<ReferenceFrame>::error(AudioChatError::NotInitialized,
+                                             "Reference signal buffer not initialized");
+    }
+    if (num_samples <= 0 ||
+        num_samples > std::numeric_limits<int32_t>::max() / config_.num_channels) {
+        return Result<ReferenceFrame>::error(AudioChatError::InvalidArgument,
+                                             "Invalid reference frame size");
     }
 
-    if (num_samples <= 0) {
-        return Result<ReferenceFrame>::error(
-            AudioChatError::InvalidArgument,
-            "Invalid number of samples: " + std::to_string(num_samples)
-        );
+    const uint64_t delay_samples = static_cast<uint64_t>(GetDelaySamples());
+    const uint64_t requested = static_cast<uint64_t>(num_samples);
+    if (total_pushed_samples_ < delay_samples + requested) {
+        return Result<ReferenceFrame>::error(AudioChatError::BufferUnderflow,
+                                             "Insufficient buffered reference signal");
     }
 
-    int32_t samples_needed = num_samples * config_.num_channels;
-    int32_t delay_samples = GetDelaySamples() * config_.num_channels;
-
-    // We need: delay_samples + samples_needed data in buffer
-    int32_t total_needed = delay_samples + samples_needed;
-
-    if (static_cast<int32_t>(buffer_.size()) < total_needed) {
-        LOG_WARN("Reference buffer underflow: have={}, need={}",
-                 buffer_.size(), total_needed);
-        return Result<ReferenceFrame>::error(
-            AudioChatError::BufferUnderflow,
-            "Insufficient buffered data: have " + std::to_string(buffer_.size()) +
-            ", need " + std::to_string(total_needed)
-        );
+    const uint64_t start = total_pushed_samples_ - delay_samples - requested;
+    if (start < next_read_sample_ || start < buffer_start_sample_) {
+        return Result<ReferenceFrame>::error(AudioChatError::BufferUnderflow,
+                                             "No new delayed reference signal available");
     }
 
-    // Extract samples starting from delay_samples position
+    const size_t offset = static_cast<size_t>(start - buffer_start_sample_) * config_.num_channels;
+    const size_t count = static_cast<size_t>(num_samples) * config_.num_channels;
+    if (offset > buffer_.size() || count > buffer_.size() - offset) {
+        return Result<ReferenceFrame>::error(AudioChatError::BufferUnderflow,
+                                             "Reference signal was discarded");
+    }
+
     ReferenceFrame frame;
     frame.num_samples = num_samples;
-    frame.data.reserve(samples_needed);
-    
-    auto start_it = buffer_.begin() + delay_samples;
-    auto end_it = start_it + samples_needed;
-    frame.data.insert(frame.data.end(), start_it, end_it);
-
-    frames_retrieved_++;
-
-    return Result<ReferenceFrame>::ok(frame);
+    frame.timestamp_ms = start * 1000ULL / config_.sample_rate_hz;
+    frame.data.reserve(count);
+    auto begin = buffer_.begin();
+    std::advance(begin, static_cast<std::ptrdiff_t>(offset));
+    frame.data.insert(frame.data.end(), begin, begin + static_cast<std::ptrdiff_t>(count));
+    next_read_sample_ = start + requested;
+    ++frames_retrieved_;
+    return Result<ReferenceFrame>::ok(std::move(frame));
 }
 
 int32_t ReferenceSignalBuffer::GetBufferedSamples() const {
-    if (config_.num_channels <= 0) {
-        return 0;
-    }
-    return buffer_.size() / config_.num_channels;
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
+    return static_cast<int32_t>(buffer_.size() / config_.num_channels);
 }
 
 std::string ReferenceSignalBuffer::GetStatistics() const {
-    std::ostringstream ss;
-    ss << "ReferenceSignalBuffer Statistics:\n"
-       << "  Sample rate: " << config_.sample_rate_hz << " Hz\n"
-       << "  Channels: " << config_.num_channels << "\n"
-       << "  Frame duration: " << config_.frame_duration_ms << " ms\n"
-       << "  Configured delay: " << config_.delay_ms << " ms (" 
-       << GetDelaySamples() << " samples)\n"
-       << "  Buffer duration: " << config_.buffer_duration_ms << " ms\n"
-       << "  Max buffer size: " << GetMaxBufferSamples() * config_.num_channels << " samples\n"
-       << "  Current buffer fill: " << buffer_.size() << " samples ("
-       << GetBufferedSamples() << " per-channel)\n"
-       << "  Frames pushed: " << frames_pushed_ << "\n"
-       << "  Frames retrieved: " << frames_retrieved_;
-    return ss.str();
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
+    std::ostringstream stream;
+    stream << "ReferenceSignalBuffer Statistics:\n"
+           << "  Sample rate: " << config_.sample_rate_hz << " Hz\n"
+           << "  Channels: " << config_.num_channels << "\n"
+           << "  Frame duration: " << config_.frame_duration_ms << " ms\n"
+           << "  Configured delay: " << config_.delay_ms << " ms ("
+           << GetDelaySamples() << " samples/channel)\n"
+           << "  Buffer duration: " << config_.buffer_duration_ms << " ms\n"
+           << "  Max buffer size: " << GetMaxBufferSamples() << " interleaved samples\n"
+           << "  Current buffer fill: " << buffer_.size() << " interleaved samples\n"
+           << "  Frames pushed: " << frames_pushed_ << "\n"
+           << "  Frames retrieved: " << frames_retrieved_;
+    return stream.str();
 }
 
 void ReferenceSignalBuffer::Clear() {
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
     buffer_.clear();
+    buffer_start_sample_ = 0;
+    total_pushed_samples_ = 0;
+    next_read_sample_ = 0;
+    last_push_timestamp_ms_ = 0;
     frames_pushed_ = 0;
     frames_retrieved_ = 0;
-    LOG_INFO("Reference signal buffer cleared");
 }
 
 bool ReferenceSignalBuffer::HasSufficientData(int32_t num_samples) const {
-    if (num_samples <= 0) {
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
+    if (!is_initialized_ || num_samples <= 0 ||
+        num_samples > std::numeric_limits<int32_t>::max() / config_.num_channels) {
         return false;
     }
-    int32_t samples_needed = num_samples * config_.num_channels;
-    int32_t delay_samples = GetDelaySamples() * config_.num_channels;
-    return static_cast<int32_t>(buffer_.size()) >= (delay_samples + samples_needed);
+    const uint64_t delay_samples = static_cast<uint64_t>(GetDelaySamples());
+    const uint64_t requested = static_cast<uint64_t>(num_samples);
+    if (total_pushed_samples_ < delay_samples + requested) {
+        return false;
+    }
+    const uint64_t start = total_pushed_samples_ - delay_samples - requested;
+    return start >= next_read_sample_ && start >= buffer_start_sample_;
 }
 
 } // namespace AudioChat

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "Result.h"
 #include "Logger.h"
+#include <memory>
 
 class ResultTest : public ::testing::Test {
 protected:
@@ -73,4 +74,23 @@ TEST_F(ResultTest, ThrowIfError) {
     EXPECT_NO_THROW({
         ok_result.throwIfError();
     });
+}
+
+TEST_F(ResultTest, SupportsMoveOnlyValues) {
+    auto value = std::make_unique<int>(42);
+    auto result = Result<std::unique_ptr<int>>::ok(std::move(value));
+
+    ASSERT_TRUE(result.isOk());
+    ASSERT_NE(result.value(), nullptr);
+    EXPECT_EQ(*result.value(), 42);
+    EXPECT_EQ(value, nullptr);
+}
+
+TEST_F(ResultTest, MoveOnlyErrorHasNoValue) {
+    auto result = Result<std::unique_ptr<int>>::error(
+        AudioChatError::InternalError, "No value"
+    );
+
+    ASSERT_TRUE(result.isError());
+    EXPECT_THROW(result.value(), std::bad_optional_access);
 }

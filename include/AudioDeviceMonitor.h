@@ -5,6 +5,8 @@
 #include <functional>
 #include <atomic>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <memory>
 
 /**
@@ -114,19 +116,22 @@ public:
     bool isDeviceConnected(const std::string& device_id) const;
 
 private:
-    bool running_ = false;
+    std::atomic<bool> running_{false};
+    std::atomic<bool> monitoring_{false};
     mutable std::mutex state_mutex_;
-    
+    std::mutex lifecycle_mutex_;
+    std::mutex wait_mutex_;
+    std::condition_variable wait_cv_;
+    bool portaudio_initialized_ = false;
+
     std::vector<AudioDeviceInfo> input_devices_;
     std::vector<AudioDeviceInfo> output_devices_;
-    
+
     DeviceEventCallback device_event_callback_;
-    
-    // Windows-specific monitoring
+
     static constexpr int DEVICE_POLL_INTERVAL_MS = 1000;
     std::thread monitor_thread_;
-    std::atomic<bool> monitoring_{false};
-    
+
     void monitoringLoop();
     void detectDeviceChanges();
     void notifyDeviceEvent(const DeviceEvent& event);

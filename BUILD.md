@@ -1,98 +1,101 @@
 # Building AudioChat
 
-## Prerequisites
+## Requirements
 
-- CMake 3.28 or higher
-- Ninja build system
-- Clang 16+ or MSVC 2022
-- vcpkg package manager (optional, for dependency management)
+- Windows 10/11 x64
+- Visual Studio 2026 with C++ support
+- CMake 3.28 or newer
+- Ninja (only for Ninja presets)
+- vcpkg
 
-## Install Dependencies
+The repository uses manifest mode. Do not install only PortAudio and Opus: `spdlog` and `yaml-cpp` are also required, and tests require GoogleTest.
 
-### Using vcpkg (Recommended)
+## 1. Prepare vcpkg
 
-```bash
-# Clone vcpkg if not already installed
-git clone https://github.com/microsoft/vcpkg thirdparty/vcpkg
-
-# Install dependencies
-thirdparty/vcpkg/vcpkg install portaudio:x64-windows opus:x64-windows
+```powershell
+git clone https://github.com/microsoft/vcpkg.git C:\dev\vcpkg
+C:\dev\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+$env:VCPKG_ROOT = "C:\dev\vcpkg"
 ```
 
-### Manual Build
+The manifest pins the vcpkg baseline and dependency versions.
 
-If you prefer to build dependencies manually, place the built libraries in:
-- `thirdparty/PortAudio/lib/` - PortAudio library
-- `thirdparty/Opus/lib/` - Opus library
+## 2. Configure
 
-## Build
-
-### Using CMake Presets
-
-```bash
-# Configure (clang-debug)
-cmake --preset clang-debug
-
-# Configure (clang-release)
-cmake --preset clang-release
-
-# Build
-cmake --build --preset clang-debug
-
-# Or specify preset directly
-cmake --build out/build/clang-debug
+```powershell
+cmake -S . -B out/build/msvc-phase0 -G "Visual Studio 18 2026" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+  -DBUILD_TESTING=ON `
+  -DREQUIRE_AEC=OFF
 ```
 
-### Manual Build
+Important options:
 
-```bash
-# Configure with vcpkg toolchain
-cmake -S . -B out/build -G Ninja ^
-  -DCMAKE_C_COMPILER=clang ^
-  -DCMAKE_CXX_COMPILER=clang++ ^
-  -DCMAKE_BUILD_TYPE=Debug ^
-  -DCMAKE_TOOLCHAIN_FILE=thirdparty/vcpkg/scripts/buildsystems/vcpkg.cmake
+| Option | Default | Meaning |
+|---|---:|---|
+| `BUILD_TESTING` | `ON` | Build and register GoogleTest tests |
+| `BUILD_GUI` | `OFF` | Qt GUI is not part of the current release scope |
+| `REQUIRE_AEC` | `OFF` | Fail configuration if WebRTC APM is unavailable |
 
-# Build
-cmake --build out/build
+`REQUIRE_AEC=ON` is reserved for the production AEC build after stage 2 is complete.
+
+## 3. Build and test
+
+```powershell
+cmake --build out/build/msvc-phase0 --config Debug --parallel
+ctest --test-dir out/build/msvc-phase0 -C Debug --output-on-failure --timeout 20
+
+cmake --build out/build/msvc-phase0 --config Release --parallel
+ctest --test-dir out/build/msvc-phase0 -C Release --output-on-failure --timeout 20
 ```
 
-### Using Build Script
+The test target uses GoogleTest discovery and per-test timeouts. A test that deadlocks is reported as a failure instead of hanging indefinitely.
 
-```bash
-# Build with Debug configuration using Clang
-.\build.ps1 -Config Debug -Toolchain Clang
+## 4. Run smoke checks
 
-# Build with Release configuration using MSVC
-.\build.ps1 -Config Release -Toolchain MSVC
+```powershell
+.\out\build\msvc-phase0\bin\Release\AudioChat.exe --version
+.\out\build\msvc-phase0\bin\Release\AudioChat.exe --check
+.\out\build\msvc-phase0\bin\Release\AudioChat.exe --list-devices
+.\out\build\msvc-phase0\bin\Release\AudioChat.exe --duration 2
 ```
 
-## Run
+`--duration 2` opens the default audio devices, starts the engine, and verifies graceful shutdown.
 
-```bash
-# From build directory
-out/build/clang-debug/bin/AudioChat.exe
+## 5. Install
+
+```powershell
+cmake --install out/build/msvc-phase0 --config Release --prefix .\dist\audiochat
+```
+
+The install tree contains:
+
+```text
+bin/
+  AudioChat.exe
+  portaudio.dll
+  opus.dll
+  spdlog.dll
+  fmt.dll
+  yaml-cpp.dll
+config/
+  default.yaml
+  presets/
+    low-latency.yaml
+    balanced.yaml
+    high-quality.yaml
 ```
 
 ## Troubleshooting
 
-### PortAudio/Opus not found
-Ensure vcpkg is installed and dependencies are installed:
-```bash
-thirdparty/vcpkg/vcpkg install portaudio:x64-windows opus:x64-windows
-```
+### Dependencies are not found
 
-### Compiler not found
-Ensure Clang or MSVC is in your PATH:
-```bash
-# For Clang
-where clang++
-# For MSVC
-"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
-```
+Confirm that `CMAKE_TOOLCHAIN_FILE` points to your vcpkg checkout and that the triplet is `x64-windows`. CMake now treats PortAudio, Opus, spdlog and yaml-cpp as required; it will not silently skip the executable.
 
-### CMake cannot find vcpkg
-Set VCPKG_ROOT environment variable:
-```bash
-$env:VCPKG_ROOT="C:\path\to\vcpkg"
-```
+### No audio device
+
+Run `--list-devices` and set `audio.input_device` / `audio.output_device` to a listed name, or use `auto`.
+
+### Build preset cannot find `cl.exe`
+
+The Ninja presets require a Developer Command Prompt. The Visual Studio generator shown above does not.

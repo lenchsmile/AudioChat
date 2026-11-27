@@ -1,145 +1,72 @@
 # AudioChat
 
-Audio Chat Application with Opus codec and PortAudio.
+AudioChat 是一个基于 C++20、PortAudio 和 Opus 的 Windows P2P 音频通信项目。
 
-## Features
+> **当前版本：0.5.0 开发基线，不是生产发布版。**
+> 阶段 0A（可复现构建）和阶段 0B（内存、并发、网络安全）已完成。
+> WebRTC AEC 尚未实现，GUI 尚未集成，通信仅适用于受信局域网。
 
-- Real-time audio chat over network
-- Opus codec for audio compression
-- PortAudio for audio I/O
-- Jitter buffer for network packet reordering
-- Audio recording capability
+## 已实现
 
-## Project Structure
+- 统一的 `audiochat_core` 静态库和 `AudioChat` 控制台程序
+- 安全的 UDP 报文格式、长度校验、来源校验和固定容量 JitterBuffer
+- 基于 SPSC 队列的音频采集、可中断的线程退出和 PortAudio RAII 管理
+- YAML 配置、三个质量预设、配置往返和事务式加载
+- 网络统计、心跳、拥塞控制、NACK 组件
+- Windows MSVC Debug/Release 构建
+- 238 项注册测试，Debug 和 Release 均通过
 
-```
-AudioChat/
-├── CMakeLists.txt             # Main CMake configuration
-├── CMakePresets.json         # Build presets for different configurations
-├── README.md                 # This file
-├── BUILD.md                  # Build instructions
-├── .clang-format             # Code formatting configuration
-├── .clang-tidy               # Code analysis configuration
-├── .gitignore                # Git ignore rules
-├── config.ini                # Application configuration
-├── cmake/                    # Custom CMake modules
-│   ├── FindPortAudio.cmake
-│   ├── FindOpus.cmake
-│   └── uninstall.cmake.in
-├── include/                  # Header files
-│   ├── AudioHandler.h
-│   ├── AudioRecorder.h
-│   ├── Codec.h
-│   ├── JitterBuffer.h
-│   ├── NetworkHandler.h
-│   └── SpscFixedSlots.h
-├── src/                      # Source files
-│   ├── main.cpp
-│   ├── AudioHandler.cpp
-│   ├── AudioRecorder.cpp
-│   ├── Codec.cpp
-│   ├── JitterBuffer.cpp
-│   └── NetworkHandler.cpp
-├── thirdparty/               # Third-party dependencies
-│   ├── Opus/
-│   └── PortAudio/
-└── out/                      # Build output (generated)
-    └── build/
-        ├── clang-debug/
-        ├── clang-release/
-        ├── msvc-debug/
-        └── msvc-release/
+## 尚未实现
+
+- WebRTC Audio Processing 真实 AEC、参考信号时序和 ERLE 验收
+- 网络可靠性组件在引擎中的完整闭环集成
+- Qt GUI 构建和引擎连接
+- DTLS/SRTP、身份认证和公网安全部署
+- Linux/macOS 支持
+
+## 构建
+
+依赖由仓库根目录的 `vcpkg.json` 管理。
+
+```powershell
+$env:VCPKG_ROOT = "C:\path\to\vcpkg"
+
+cmake -S . -B out/build/msvc-phase0 -G "Visual Studio 18 2026" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+  -DBUILD_TESTING=ON `
+  -DREQUIRE_AEC=OFF
+
+cmake --build out/build/msvc-phase0 --config Release --parallel
+ctest --test-dir out/build/msvc-phase0 -C Release --output-on-failure
 ```
 
-## Requirements
+`REQUIRE_AEC=ON` 仅在 WebRTC Audio Processing 后端可用并完成阶段 2 后使用。
 
-- CMake 3.28 or higher
-- Ninja build system
-- Clang 16+ or MSVC 2022
-- PortAudio library
-- Opus library
+## 运行
 
-## Build
-
-### Using CMake Presets (Recommended)
-
-```bash
-# Configure with Clang Debug
-cmake --preset clang-debug
-
-# Configure with Clang Release
-cmake --preset clang-release
-
-# Build
-cmake --build --preset clang-debug
-
-# Or build directly
-cmake --build out/build/clang-debug
-
-# Run tests
-ctest --preset clang-debug
-
-# Install
-cmake --install out/build/clang-debug
-
-# Uninstall
-cmake --build out/build/clang-debug --target uninstall
+```powershell
+.\out\build\msvc-phase0\bin\Release\AudioChat.exe --check
+.\out\build\msvc-phase0\bin\Release\AudioChat.exe --list-devices
+.\out\build\msvc-phase0\bin\Release\AudioChat.exe --config .\config\default.yaml --duration 10
 ```
 
-### Using Build Script
+支持 `--preset low-latency|balanced|high-quality`、`--version` 和 `--help`。
 
-```bash
-# Build with Debug configuration using Clang
-.\build.ps1 -Config Debug -Toolchain Clang
+## 安装
 
-# Build with Release configuration using MSVC
-.\build.ps1 -Config Release -Toolchain MSVC
+```powershell
+cmake --install out/build/msvc-phase0 --config Release --prefix .\dist\audiochat
 ```
 
-### Manual Configuration
+安装包包含可执行文件、运行时 DLL 和 YAML 配置。
 
-```bash
-# Configure
-cmake -S . -B out/build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+## 安全限制
 
-# Build
-cmake --build out/build
-```
+当前 UDP 音频没有加密、完整性保护或身份认证。只能部署在受信局域网或隔离内网，不得暴露到公网。参见 `LIMITATIONS.md`。
 
-## CMake Presets
+## 文档
 
-### clang-debug
-Debug build with Clang compiler
-- Binary dir: `out/build/clang-debug`
-- Generator: Ninja
-- Compiler: Clang
-
-### clang-release
-Release build with Clang compiler
-- Binary dir: `out/build/clang-release`
-- Generator: Ninja
-- Compiler: Clang
-
-### msvc-debug
-Debug build with MSVC compiler
-- Binary dir: `out/build/msvc-debug`
-- Generator: Ninja
-- Compiler: MSVC
-
-### msvc-release
-Release build with MSVC compiler
-- Binary dir: `out/build/msvc-release`
-- Generator: Ninja
-- Compiler: MSVC
-
-## Dependencies
-
-Dependencies are located in the `thirdparty/` directory:
-- **PortAudio**: Cross-platform audio I/O library
-- **Opus**: Audio codec for speech and music
-
-For Windows, the project is configured to use vcpkg for dependency management.
-
-## License
-
-MIT License
+- `BUILD.md`：完整构建和测试说明
+- `LIMITATIONS.md`：当前限制和未完成功能
+- `CHANGELOG.md`：版本变更
+- `AUDIT_REPORT.md`、`REMEDIATION_PLAN.md`、`审查总结.md`：历史审查材料

@@ -3,6 +3,7 @@
 #include "Logger.h"
 #include <memory>
 #include <cstring>
+#include <algorithm>
 #include <vector>
 
 using namespace AudioChat;
@@ -241,6 +242,7 @@ TEST_F(AecAudioHandlerTest, DelayRangesValid) {
     // Test various delays
     for (int delay : {0, 10, 20, 30, 50, 100, 200}) {
         config.buffer_config.delay_ms = delay;
+        config.buffer_config.buffer_duration_ms = std::max(300, delay + 100);
         auto result = config.Validate();
         EXPECT_TRUE(result.isOk()) << "Delay " << delay << "ms should be valid";
     }
@@ -405,5 +407,3 @@ TEST_F(AecAudioHandlerTest, ApiCompleteness) {
     EXPECT_TRUE(config.aec_config.enable_ns != false || config.aec_config.enable_ns == false);
     EXPECT_TRUE(config.aec_config.enable_agc != false || config.aec_config.enable_agc == false);
 }
-
-} // namespace (empty, tests are in global namespace for gtest)

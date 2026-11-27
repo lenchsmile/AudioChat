@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "ReferenceSignalBuffer.h"
 #include <cstring>
+#include <algorithm>
 #include <vector>
 
 using namespace AudioChat;
@@ -106,6 +107,7 @@ TEST_F(ReferenceSignalBufferTest, ValidateDelay) {
     // Valid delays: 0-200ms
     for (int delay : {0, 1, 30, 100, 200}) {
         config.delay_ms = delay;
+        config.buffer_duration_ms = std::max(300, delay + 100);
         auto result = config.Validate();
         EXPECT_TRUE(result.isOk()) << "Delay " << delay << " ms should be valid";
     }
@@ -161,7 +163,7 @@ TEST_F(ReferenceSignalBufferTest, CreateWithValidConfig) {
     auto result = ReferenceSignalBuffer::Create(config);
     EXPECT_TRUE(result.isOk()) << "Should create buffer with valid config";
     
-    auto buffer = result.value();
+    auto buffer = std::move(result.value());
     EXPECT_TRUE(buffer != nullptr);
 }
 
@@ -277,7 +279,7 @@ TEST_F(ReferenceSignalBufferTest, GetDelayedReference) {
     EXPECT_TRUE(ref_result.isOk()) << "Should retrieve delayed reference";
     
     if (ref_result.isOk()) {
-        auto ref = ref_result.value();
+        auto ref = std::move(ref_result.value());
         EXPECT_EQ(ref.num_samples, 480);
         EXPECT_EQ(ref.data.size(), 480);  // 1 channel
     }
@@ -314,7 +316,7 @@ TEST_F(ReferenceSignalBufferTest, GetDelayedReferenceZeroDelay) {
     EXPECT_TRUE(ref_result.isOk());
     
     if (ref_result.isOk()) {
-        auto ref = ref_result.value();
+        auto ref = std::move(ref_result.value());
         EXPECT_EQ(ref.data[0], 42);  // Should match input
     }
 }
@@ -465,5 +467,3 @@ TEST_F(ReferenceSignalBufferTest, VariableSampleRates) {
         }
     }
 }
-
-} // namespace (empty, tests are in global namespace for gtest)

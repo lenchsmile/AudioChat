@@ -3,6 +3,7 @@
 #include <string>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 /**
  * @brief Audio Chat error codes
@@ -59,15 +60,15 @@ public:
     /**
      * @brief Create a successful result
      */
-    static Result ok(const T& value = T()) {
-        return Result(value, AudioChatError::Success, "");
+    static Result ok(T value) {
+        return Result(std::move(value), AudioChatError::Success, "");
     }
 
     /**
      * @brief Create an error result
      */
     static Result error(AudioChatError error_code, const std::string& message = "") {
-        return Result(T(), error_code, message);
+        return Result(std::nullopt, error_code, message);
     }
 
     /**
@@ -93,12 +94,12 @@ public:
     /**
      * @brief Get the value (only valid if isOk())
      */
-    const T& value() const { return value_; }
+    const T& value() const { return value_.value(); }
 
     /**
      * @brief Get mutable reference to value
      */
-    T& value() { return value_; }
+    T& value() { return value_.value(); }
 
     /**
      * @brief Convert to string for logging
@@ -118,12 +119,12 @@ public:
     }
 
 private:
-    T value_;
+    std::optional<T> value_;
     AudioChatError error_code_;
     std::string message_;
 
-    explicit Result(const T& value, AudioChatError error_code, const std::string& message)
-        : value_(value), error_code_(error_code), message_(message) {}
+    explicit Result(std::optional<T> value, AudioChatError error_code, const std::string& message)
+        : value_(std::move(value)), error_code_(error_code), message_(message) {}
 };
 
 /**

@@ -1,232 +1,276 @@
 #include "AudioHandler.h"
-#include <stdexcept>
-#include <cstring>
-#include <iostream>
-#include <thread>
+
 #include "AudioRecorder.h"
 
-AudioHandler::AudioHandler(int input_sample_rate,int output_sample_rate,int input_frames_per_buffer,int output_frames_per_buffer,const char* input_name,const char* output_name,HANDLE capture_ready_event) :
-	recording(false),
-	capture_queue_(4096,output_frames_per_buffer),
-	playback_queue_(4096,output_frames_per_buffer),
-	capture_ready_event_(capture_ready_event),
-	input_device_name(_strdup(input_name)),
-	output_device_name(_strdup(output_name)),
+#include <algorithm>
+#include <cstring>
+#include <iostream>
+#include <stdexcept>
+#include <thread>
+#include <utility>
+#include <vector>
 
-	input_sample_rate_(input_sample_rate),
-	output_sample_rate_(output_sample_rate),
-	input_frames_per_buffer_(input_frames_per_buffer),
-	output_frames_per_buffer_(output_frames_per_buffer),
+namespace {
 
-	input_device(paNoDevice),
-	output_device(paNoDevice),
-	capture_buffer_ptr_(nullptr)
-{
-	PaError err = Pa_Initialize();
-	if(err != paNoError)
-	{
-		throw std::runtime_error(std::string("Pa_Initialize failed: ") + Pa_GetErrorText(err));
-	}
-
-	selectValidDevices();
-
-	capture_buffer_ptr_ = reinterpret_cast<int16_t*>(malloc(output_frames_per_buffer * sizeof(int16_t)));
-
-	if(!capture_buffer_ptr_)
-	{
-		throw std::runtime_error("Failed to allocate capture buffer");
-	}
-
-	PaStreamParameters input_params{};
-	input_params.device = input_device;
-	if(input_params.device == paNoDevice) throw std::runtime_error("No input device");
-	input_params.channelCount = 1;
-	input_params.sampleFormat = paInt16;
-	input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-	input_params.hostApiSpecificStreamInfo = nullptr;
-
-	PaStreamParameters output_params{};
-	output_params.device = output_device;
-	if(output_params.device == paNoDevice) throw std::runtime_error("No output device");
-	output_params.channelCount = 1;
-	output_params.sampleFormat = paInt16;
-	output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
-	output_params.hostApiSpecificStreamInfo = nullptr;
-
-	err = Pa_OpenStream(&input_stream_,&input_params,nullptr,input_sample_rate_,input_frames_per_buffer_,paClipOff,audioCallback,this);
-	if(err != paNoError) throw std::runtime_error(std::string("Pa_OpenStream (input) failed: ") + Pa_GetErrorText(err));
-
-	err = Pa_OpenStream(&output_stream_,nullptr,&output_params,output_sample_rate_,output_frames_per_buffer_,paClipOff,nullptr,nullptr);
-	if(err != paNoError) throw std::runtime_error(std::string("Pa_OpenStream (output) failed: ") + Pa_GetErrorText(err));
-
-	err = Pa_StartStream(input_stream_);
-	if(err != paNoError) throw std::runtime_error(std::string("Pa_StartStream (input) failed: ") + Pa_GetErrorText(err));
-
-	err = Pa_StartStream(output_stream_);
-	if(err != paNoError) throw std::runtime_error(std::string("Pa_StartStream (output) failed: ") + Pa_GetErrorText(err));
+bool isAutoDevice(const std::string& name) {
+    return name.empty() || name == "auto" || name == "default";
 }
 
-AudioHandler::AudioHandler(int frame_cache_time,const char* input_name,const char* output_name,HANDLE capture_ready_even) :
-	AudioHandler(48000,48000,48000 * frame_cache_time / 1000,48000 * frame_cache_time / 1000,input_name,output_name,capture_ready_even)
-{
+} // namespace
+
+AudioHandler::AudioHandler(int input_sample_rate, int output_sample_rate,
+                           int input_frames_per_buffer, int output_frames_per_buffer,
+                           const char* input_name, const char* output_name,
+                           HANDLE capture_ready_event)
+    : capture_queue_(64, static_cast<size_t>(std::max(1, input_frames_per_buffer))),
+      playback_queue_(64, static_cast<size_t>(std::max(1, output_frames_per_buffer))),
+      capture_ready_event_(capture_ready_event),
+      input_device_name_(input_name ? input_name : ""),
+      output_device_name_(output_name ? output_name : ""),
+      input_sample_rate_(input_sample_rate),
+      output_sample_rate_(output_sample_rate),
+      input_frames_per_buffer_(input_frames_per_buffer),
+      output_frames_per_buffer_(output_frames_per_buffer) {
+    if (input_sample_rate_ <= 0 || output_sample_rate_ <= 0 ||
+        input_frames_per_buffer_ <= 0 || output_frames_per_buffer_ <= 0) {
+        throw std::invalid_argument("Invalid audio stream configuration");
+    }
+
+    const PaError init_error = Pa_Initialize();
+    if (init_error != paNoError) {
+        throw std::runtime_error(std::string("Pa_Initialize failed: ") +
+                                 Pa_GetErrorText(init_error));
+    }
+    portaudio_initialized_ = true;
+
+    try {
+        selectValidDevices();
+
+        PaStreamParameters input_parameters{};
+        input_parameters.device = input_device_;
+        input_parameters.channelCount = 1;
+        input_parameters.sampleFormat = paInt16;
+        input_parameters.suggestedLatency =
+            Pa_GetDeviceInfo(input_parameters.device)->defaultLowInputLatency;
+
+        PaStreamParameters output_parameters{};
+        output_parameters.device = output_device_;
+        output_parameters.channelCount = 1;
+        output_parameters.sampleFormat = paInt16;
+        output_parameters.suggestedLatency =
+            Pa_GetDeviceInfo(output_parameters.device)->defaultLowOutputLatency;
+
+        PaError error = Pa_OpenStream(&input_stream_, &input_parameters, nullptr,
+                                      input_sample_rate_, input_frames_per_buffer_,
+                                      paClipOff, audioCallback, this);
+        if (error != paNoError) {
+            throw std::runtime_error(std::string("Pa_OpenStream (input) failed: ") +
+                                     Pa_GetErrorText(error));
+        }
+
+        error = Pa_OpenStream(&output_stream_, nullptr, &output_parameters,
+                              output_sample_rate_, output_frames_per_buffer_,
+                              paClipOff, nullptr, nullptr);
+        if (error != paNoError) {
+            throw std::runtime_error(std::string("Pa_OpenStream (output) failed: ") +
+                                     Pa_GetErrorText(error));
+        }
+
+        error = Pa_StartStream(input_stream_);
+        if (error != paNoError) {
+            throw std::runtime_error(std::string("Pa_StartStream (input) failed: ") +
+                                     Pa_GetErrorText(error));
+        }
+
+        error = Pa_StartStream(output_stream_);
+        if (error != paNoError) {
+            throw std::runtime_error(std::string("Pa_StartStream (output) failed: ") +
+                                     Pa_GetErrorText(error));
+        }
+    } catch (...) {
+        cleanupStreams();
+        if (portaudio_initialized_) {
+            Pa_Terminate();
+            portaudio_initialized_ = false;
+        }
+        throw;
+    }
 }
 
-AudioHandler::~AudioHandler()
-{
-	stop();
-	Pa_Terminate();
-	free(input_device_name);
-	free(output_device_name);
+AudioHandler::AudioHandler(int frame_cache_time, const char* input_name,
+                           const char* output_name, HANDLE capture_ready_event)
+    : AudioHandler(48000, 48000, 48000 * frame_cache_time / 1000,
+                   48000 * frame_cache_time / 1000, input_name, output_name,
+                   capture_ready_event) {
 }
 
-int AudioHandler::audioCallback(const void* input,void* output,unsigned long frameCount,
-	const PaStreamCallbackTimeInfo* timeInfo,PaStreamCallbackFlags statusFlags,void* userData)
-{
-	static AudioHandler* handler = static_cast<AudioHandler*>(userData);
-
-
-	memcpy(handler->capture_buffer_ptr_,input,frameCount * sizeof(int16_t));
-
-	SetEvent(handler->capture_ready_event_);
-	return paContinue;
+AudioHandler::~AudioHandler() {
+    stop();
+    if (portaudio_initialized_) {
+        Pa_Terminate();
+        portaudio_initialized_ = false;
+    }
 }
 
-void AudioHandler::play(const int16_t* data,int32_t data_size)
-{
-	if(recording)
-	{
-		playback_queue_.tryWriteFrom(data);
-	}
-	PaError err = Pa_WriteStream(output_stream_,data,data_size);
-	if(err != paNoError)
-	{
-		std::cerr << "Pa_WriteStream failed: " << Pa_GetErrorText(err) << std::endl;
-	}
+int AudioHandler::audioCallback(const void* input, void* output, unsigned long frame_count,
+                                const PaStreamCallbackTimeInfo* time_info,
+                                PaStreamCallbackFlags status_flags, void* user_data) {
+    (void)output;
+    (void)time_info;
+    (void)status_flags;
+
+    auto* handler = static_cast<AudioHandler*>(user_data);
+    if (!handler || handler->stopped_.load() || !input) {
+        return paContinue;
+    }
+
+    int16_t* slot = handler->capture_queue_.tryAcquireWrite();
+    if (slot) {
+        const size_t capacity = handler->capture_queue_.elemsPerSlot();
+        const size_t count = std::min(capacity, static_cast<size_t>(frame_count));
+        std::memset(slot, 0, capacity * sizeof(int16_t));
+        std::memcpy(slot, input, count * sizeof(int16_t));
+        handler->capture_queue_.commitWrite();
+    }
+
+    if (handler->capture_ready_event_) {
+        SetEvent(handler->capture_ready_event_);
+    }
+    return paContinue;
 }
 
-void AudioHandler::swapCaptureBuffer(int16_t*& capture_buffer_ptr)
-{
-	// if(recording)
-	// {
-	// 	capture_queue_.tryWriteFrom(capture_buffer_ptr_);
-	// }
-	std::swap(capture_buffer_ptr,capture_buffer_ptr_);
+bool AudioHandler::readCaptureFrame(int16_t* destination, size_t capacity_samples) {
+    if (!destination || capacity_samples < static_cast<size_t>(input_frames_per_buffer_)) {
+        return false;
+    }
+    return capture_queue_.tryReadTo(destination);
 }
 
-void AudioHandler::startRecordeAudio()
-{
-	recording = true;
-	std::thread([this]()
-	{
-		AudioRecorder recorder(output_sample_rate_,1);
+void AudioHandler::play(const int16_t* data, int32_t sample_count) {
+    if (stopped_.load() || !data || sample_count <= 0) {
+        return;
+    }
 
-		int16_t* capture_ptr{nullptr};
-		int16_t* playback_ptr{nullptr};
+    if (recording_.load() && sample_count == output_frames_per_buffer_) {
+        playback_queue_.tryWriteFrom(data);
+    }
 
-		thread_local int16_t* local_capture_ptr{reinterpret_cast<int16_t*>(malloc(output_frames_per_buffer_ * sizeof(int16_t)))};
-
-		if(!local_capture_ptr)
-		{
-			return;
-		}
-
-		thread_local int16_t* local_playback_ptr{reinterpret_cast<int16_t*>(malloc(output_frames_per_buffer_ * sizeof(int16_t)))};
-
-		if(!local_playback_ptr)
-		{
-			return;
-		}
-
-		recorder.start();
-		while(recording)
-		{
-			capture_ptr = capture_queue_.tryAcquireRead();
-
-			if(capture_ptr)
-			{
-				memcpy(local_capture_ptr,capture_ptr,output_frames_per_buffer_ * sizeof(int16_t));
-				capture_queue_.commitRead();
-			}
-
-
-			playback_ptr = playback_queue_.tryAcquireRead();
-
-			if(playback_ptr)
-			{
-				memcpy(local_playback_ptr,playback_ptr,output_frames_per_buffer_ * sizeof(int16_t));
-				playback_queue_.commitRead();
-			}
-
-			if(capture_ptr && playback_ptr)
-			{
-				recorder.recordMixed(std::vector<int16_t>(local_capture_ptr,local_capture_ptr + output_frames_per_buffer_),std::vector<int16_t>(local_playback_ptr,local_playback_ptr + output_frames_per_buffer_));
-			}
-			else
-			{
-				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			}
-		}
-	}).detach();
+    const PaError error = Pa_WriteStream(output_stream_, data, sample_count);
+    if (error != paNoError) {
+        std::cerr << "Pa_WriteStream failed: " << Pa_GetErrorText(error) << std::endl;
+    }
 }
 
-void AudioHandler::stopRecordeAudio()
-{
-	recording = false;
+void AudioHandler::startRecordeAudio() {
+    if (stopped_.load() || recording_.exchange(true)) {
+        return;
+    }
+    try {
+        record_thread_ = std::thread(&AudioHandler::recordingLoop, this);
+    } catch (...) {
+        recording_ = false;
+        throw;
+    }
 }
 
-bool AudioHandler::isRecording()
-{
-	return recording;
+void AudioHandler::stopRecordeAudio() {
+    recording_ = false;
+    if (record_thread_.joinable()) {
+        if (std::this_thread::get_id() == record_thread_.get_id()) {
+            return;
+        }
+        record_thread_.join();
+    }
 }
 
-void AudioHandler::stop()
-{
-	if(input_stream_)
-	{
-		Pa_StopStream(input_stream_);
-		input_stream_ = nullptr;
-	}
-	if(output_stream_)
-	{
-		Pa_CloseStream(output_stream_);
-		output_stream_ = nullptr;
-	}
+void AudioHandler::recordingLoop() {
+    try {
+        AudioRecorder recorder(output_sample_rate_, 1);
+        std::vector<int16_t> capture(static_cast<size_t>(output_frames_per_buffer_));
+        std::vector<int16_t> playback(static_cast<size_t>(output_frames_per_buffer_));
+        recorder.start();
+
+        while (recording_.load() && !stopped_.load()) {
+            int16_t* capture_slot = capture_queue_.tryAcquireRead();
+            int16_t* playback_slot = playback_queue_.tryAcquireRead();
+            if (capture_slot) {
+                std::memcpy(capture.data(), capture_slot, capture.size() * sizeof(int16_t));
+                capture_queue_.commitRead();
+            }
+            if (playback_slot) {
+                std::memcpy(playback.data(), playback_slot, playback.size() * sizeof(int16_t));
+                playback_queue_.commitRead();
+            }
+            if (capture_slot && playback_slot) {
+                recorder.recordMixed(capture, playback);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+    } catch (const std::exception& error) {
+        std::cerr << "Audio recording failed: " << error.what() << std::endl;
+        recording_ = false;
+    }
 }
 
-void AudioHandler::selectValidDevices()
-{
-	int num_devices = Pa_GetDeviceCount();
+void AudioHandler::stop() {
+    stopRecordeAudio();
+    if (stopped_.exchange(true)) {
+        return;
+    }
+    cleanupStreams();
+}
 
-	if(num_devices < 0)
-	{
-		std::cerr << "Pa_GetDeviceCount error: " << Pa_GetErrorText(num_devices) << "\n";
-		Pa_Terminate();
-		return;
-	}
-	PaDeviceIndex defaultInput = Pa_GetDefaultInputDevice();
+void AudioHandler::cleanupStreams() {
+    if (input_stream_) {
+        if (Pa_IsStreamActive(input_stream_) == 1) {
+            Pa_StopStream(input_stream_);
+        }
+        Pa_CloseStream(input_stream_);
+        input_stream_ = nullptr;
+    }
+    if (output_stream_) {
+        if (Pa_IsStreamActive(output_stream_) == 1) {
+            Pa_StopStream(output_stream_);
+        }
+        Pa_CloseStream(output_stream_);
+        output_stream_ = nullptr;
+    }
+}
 
-	for(int i = 0; i < num_devices; ++i)
-	{
-		const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
-		const PaHostApiInfo* hostInfo = Pa_GetHostApiInfo(info->hostApi);
+void AudioHandler::selectValidDevices() {
+    const int count = Pa_GetDeviceCount();
+    if (count < 0) {
+        throw std::runtime_error(std::string("Pa_GetDeviceCount failed: ") +
+                                 Pa_GetErrorText(count));
+    }
 
-		if(hostInfo->type != paWASAPI)
-		{
-			continue;
-		}
+    input_device_ = isAutoDevice(input_device_name_) ? Pa_GetDefaultInputDevice() : paNoDevice;
+    output_device_ = isAutoDevice(output_device_name_) ? Pa_GetDefaultOutputDevice() : paNoDevice;
 
-		//if (strcmp(info->name, u8"扬声器 (Realtek(R) Audio)"))
-		if(!strcmp(info->name,input_device_name))
-		{
-			input_device = i;
-			continue;
-		}
+    if (!isAutoDevice(input_device_name_) || !isAutoDevice(output_device_name_)) {
+        for (int index = 0; index < count; ++index) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(index);
+            if (!info) {
+                continue;
+            }
+            if (!isAutoDevice(input_device_name_) && info->maxInputChannels > 0 &&
+                input_device_name_ == info->name) {
+                input_device_ = index;
+            }
+            if (!isAutoDevice(output_device_name_) && info->maxOutputChannels > 0 &&
+                output_device_name_ == info->name) {
+                output_device_ = index;
+            }
+        }
+    }
 
-		//if (strcmp(info->name, u8"Microphone Array (适用于数字麦克风的英特尔® 智音技术)"))
-		if(!strcmp(info->name,output_device_name))
-		{
-			output_device = i;
-			continue;
-		}
-	}
+    if (input_device_ == paNoDevice || !Pa_GetDeviceInfo(input_device_) ||
+        Pa_GetDeviceInfo(input_device_)->maxInputChannels < 1) {
+        throw std::runtime_error("No matching input audio device");
+    }
+    if (output_device_ == paNoDevice || !Pa_GetDeviceInfo(output_device_) ||
+        Pa_GetDeviceInfo(output_device_)->maxOutputChannels < 1) {
+        throw std::runtime_error("No matching output audio device");
+    }
 }

@@ -107,7 +107,7 @@ Result<std::unique_ptr<CodecOptimizer>> CodecOptimizer::Create(
     }
 
     optimizer->is_initialized_ = true;
-    return Result<std::unique_ptr<CodecOptimizer>>::ok(optimizer.release());
+    return Result<std::unique_ptr<CodecOptimizer>>::ok(std::move(optimizer));
 }
 
 CodecOptimizer::CodecOptimizer(Codec* codec, const CodecOptimizationConfig& config)

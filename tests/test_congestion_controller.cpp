@@ -10,7 +10,7 @@ TEST_F(CongestionControllerTest, Initialization) {
     EXPECT_EQ(controller.getCongestionLevel(), CongestionLevel::None);
 }
 
-TEST_F(CongestionControllerTest, NoCongest ionWithLowLoss) {
+TEST_F(CongestionControllerTest, NoCongestionWithLowLoss) {
     controller.updatePacketLossRate(1.0);
     EXPECT_EQ(controller.getCongestionLevel(), CongestionLevel::None);
 }

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -136,6 +137,9 @@ private:
     // Thread management
     std::thread heartbeat_thread_;
     std::atomic<bool> running_{false};
+    std::mutex lifecycle_mutex_;
+    std::mutex wait_mutex_;
+    std::condition_variable wait_cv_;
     
     // Callbacks
     std::mutex callback_mutex_;

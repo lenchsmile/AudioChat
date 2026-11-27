@@ -31,7 +31,11 @@ if (-not ($presetFile.configurePresets.name -contains $Preset)) {
 
 # Configure
 Write-Host "`n[1/2] Configuring..." -ForegroundColor Yellow
-cmake --preset $Preset
+$ConfigureArgs = @('--preset', $Preset)
+if ($env:VCPKG_ROOT) {
+    $ConfigureArgs += "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+}
+cmake @ConfigureArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Configuration failed!" -ForegroundColor Red
     exit 1
@@ -46,4 +50,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "`nBuild completed successfully!" -ForegroundColor Green
-Write-Host "Executable: build/$Preset/bin/AudioChat.exe" -ForegroundColor Green
+Write-Host "Executable: out/build/$Preset/bin/AudioChat.exe" -ForegroundColor Green

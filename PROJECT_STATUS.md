@@ -1,5 +1,9 @@
 # AudioChat Enhancement Project - Status Report
 
+> **当前状态（2026-11-27）**：0.5.0 开发基线。阶段 0A（构建/依赖）和阶段 0B（内存/并发/网络安全）已完成；Debug/Release 各 238 项测试通过。
+> WebRTC AEC、GUI 和完整引擎网络可靠性集成尚未完成，不属于生产发布版。详见 `LIMITATIONS.md`。
+> 以下内容为历史阶段记录。
+
 **Project**: AudioChat P2P Audio Communication System  
 **Current Status**: 🚀 60% COMPLETE (3 of 5 phases)  
 **Timeline**: 2026-11-27 (All 3 phases completed in one day!)  

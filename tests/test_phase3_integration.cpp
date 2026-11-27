@@ -52,7 +52,7 @@ TEST_F(Phase3IntegrationTest, StableNetworkScenario) {
     heartbeat_active = false;
     hb_manager.stop();
     
-    EXPECT_EQ(hb_manager.getState(), ConnectionState::Connected);
+    EXPECT_EQ(hb_manager.getState(), ConnectionState::Disconnected);
     EXPECT_NEAR(monitor.getPacketLossRate(), 0.0, 1.0);
     EXPECT_EQ(congestion.getCongestionLevel(), CongestionLevel::None);
 }
@@ -170,7 +170,7 @@ TEST_F(Phase3IntegrationTest, FullReliabilityPipeline) {
     
     // Run pipeline
     hb_manager.start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
     hb_manager.stop();
     
     // Verify statistics

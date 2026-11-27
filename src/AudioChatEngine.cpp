@@ -1,156 +1,127 @@
 #include "AudioChatEngine.h"
-#include <windows.h>
-#include <iostream>
 
-AudioChatEngine::AudioChatEngine(const AudioChatConfig& config)
-    : config_(config) {
-    LOG_INFO("AudioChatEngine created with config: local={}:{}, remote={}:{}",
-             config_.local_ip, config_.local_port,
-             config_.remote_ip, config_.remote_port);
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <exception>
+#include <thread>
+#include <utility>
+#include <vector>
+
+using namespace std::chrono_literals;
+
+AudioChatEngine::AudioChatEngine(const AudioChatConfig& config) : config_(config) {
+    LOG_INFO("AudioChatEngine created: local={}:{}, remote={}:{}",
+             config_.local_ip, config_.local_port, config_.remote_ip, config_.remote_port);
 }
 
 AudioChatEngine::~AudioChatEngine() {
-    LOG_INFO("AudioChatEngine destructor called");
-    if (running_.load()) {
-        stop();
-    }
+    stop();
     cleanupResources();
 }
 
 Result<void> AudioChatEngine::init() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
     if (initialized_.load()) {
-        LOG_WARN("Engine already initialized");
-        return Result<void>::error(AudioChatError::AlreadyInitialized);
+        return Result<void>::error(AudioChatError::AlreadyInitialized,
+                                   "Engine already initialized");
+    }
+    if (running_.load()) {
+        return Result<void>::error(AudioChatError::InternalError,
+                                   "Engine is running during initialization");
     }
 
-    LOG_INFO("Initializing AudioChat engine");
-
-    auto result = initComponents();
+    const auto result = initComponents();
     if (result.isError()) {
-        LOG_ERROR("Failed to initialize components: {}", result.message());
+        cleanupResources();
         return result;
     }
 
-    initialized_.store(true);
-    LOG_INFO("AudioChat engine initialized successfully");
+    initialized_ = true;
+    LOG_INFO("AudioChatEngine initialized");
     return Result<void>::ok();
 }
 
 Result<void> AudioChatEngine::initComponents() {
-    // Initialize audio handler
-    try {
-        HANDLE capture_ready_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-        if (!capture_ready_event) {
-            LOG_ERROR("Failed to create capture ready event");
-            return Result<void>::error(AudioChatError::AudioCallbackError,
-                                      "Failed to create Windows event");
-        }
+    if (config_.local_port <= 0 || config_.local_port > 65535 ||
+        config_.remote_port <= 0 || config_.remote_port > 65535 ||
+        (config_.sample_rate != 8000 && config_.sample_rate != 16000 &&
+         config_.sample_rate != 32000 && config_.sample_rate != 48000) ||
+        (config_.frame_duration_ms != 10 && config_.frame_duration_ms != 20)) {
+        return Result<void>::error(AudioChatError::InvalidNetworkConfig,
+                                   "Invalid engine audio or network configuration");
+    }
 
+    try {
+        const int samples = config_.sample_rate * config_.frame_duration_ms / 1000;
         audio_ = std::make_unique<AudioHandler>(
-            config_.sample_rate,
-            config_.sample_rate,
-            config_.sample_rate * config_.frame_duration_ms / 1000,
-            config_.sample_rate * config_.frame_duration_ms / 1000,
-            config_.input_device.empty() ? "" : config_.input_device.c_str(),
-            config_.output_device.empty() ? "" : config_.output_device.c_str(),
-            capture_ready_event
-        );
-        LOG_INFO("AudioHandler initialized");
-    } catch (const std::exception& e) {
-        LOG_ERROR("AudioHandler initialization failed: {}", e.what());
-        return Result<void>::error(AudioChatError::AudioStreamOpenFailed, e.what());
-    }
+            config_.sample_rate, config_.sample_rate, samples, samples,
+            config_.input_device.empty() ? "auto" : config_.input_device.c_str(),
+            config_.output_device.empty() ? "auto" : config_.output_device.c_str());
 
-    // Initialize codec
-    try {
-        codec_ = std::make_unique<Codec>(config_.sample_rate, 1);
-        
-        // Apply codec configuration
-        int err = opus_encoder_ctl(codec_->getEncoder(), 
-                                   OPUS_SET_BITRATE(config_.bitrate));
-        if (err != OPUS_OK) {
-            LOG_ERROR("Failed to set Opus bitrate");
-            return Result<void>::error(AudioChatError::InvalidCodecConfig);
+        codec_ = std::make_unique<Codec>(config_.sample_rate, 1, config_.frame_duration_ms);
+
+        int error = opus_encoder_ctl(codec_->getEncoder(), OPUS_SET_BITRATE(config_.bitrate));
+        if (error != OPUS_OK) {
+            return Result<void>::error(AudioChatError::InvalidCodecConfig,
+                                       "Failed to set Opus bitrate");
+        }
+        error = opus_encoder_ctl(codec_->getEncoder(), OPUS_SET_COMPLEXITY(config_.complexity));
+        if (error != OPUS_OK) {
+            return Result<void>::error(AudioChatError::InvalidCodecConfig,
+                                       "Failed to set Opus complexity");
+        }
+        error = opus_encoder_ctl(codec_->getEncoder(),
+                                 OPUS_SET_INBAND_FEC(config_.enable_fec ? 1 : 0));
+        if (error != OPUS_OK) {
+            return Result<void>::error(AudioChatError::InvalidCodecConfig,
+                                       "Failed to configure Opus FEC");
+        }
+        error = opus_encoder_ctl(codec_->getEncoder(), OPUS_SET_DTX(config_.enable_dtx ? 1 : 0));
+        if (error != OPUS_OK) {
+            return Result<void>::error(AudioChatError::InvalidCodecConfig,
+                                       "Failed to configure Opus DTX");
+        }
+        error = opus_encoder_ctl(codec_->getEncoder(),
+                                 OPUS_SET_PACKET_LOSS_PERC(config_.packet_loss_perc));
+        if (error != OPUS_OK) {
+            return Result<void>::error(AudioChatError::InvalidCodecConfig,
+                                       "Failed to configure Opus packet loss");
         }
 
-        err = opus_encoder_ctl(codec_->getEncoder(), 
-                               OPUS_SET_COMPLEXITY(config_.complexity));
-        if (err != OPUS_OK) {
-            LOG_ERROR("Failed to set Opus complexity");
-            return Result<void>::error(AudioChatError::InvalidCodecConfig);
-        }
-
-        if (config_.enable_fec) {
-            err = opus_encoder_ctl(codec_->getEncoder(), OPUS_SET_INBAND_FEC(1));
-            if (err != OPUS_OK) {
-                LOG_WARN("Failed to enable Opus FEC");
-            } else {
-                LOG_INFO("Opus FEC enabled");
-            }
-        }
-
-        if (config_.enable_dtx) {
-            err = opus_encoder_ctl(codec_->getEncoder(), OPUS_SET_DTX(1));
-            if (err != OPUS_OK) {
-                LOG_WARN("Failed to enable Opus DTX");
-            } else {
-                LOG_INFO("Opus DTX enabled");
-            }
-        }
-
-        err = opus_encoder_ctl(codec_->getEncoder(), 
-                               OPUS_SET_PACKET_LOSS_PERC(config_.packet_loss_perc));
-        if (err != OPUS_OK) {
-            LOG_WARN("Failed to set packet loss percentage");
-        }
-
-        LOG_INFO("Codec initialized with bitrate={}, complexity={}", 
-                 config_.bitrate, config_.complexity);
-    } catch (const std::exception& e) {
-        LOG_ERROR("Codec initialization failed: {}", e.what());
-        return Result<void>::error(AudioChatError::CodecInitFailed, e.what());
-    }
-
-    // Initialize network handler
-    try {
         network_ = std::make_unique<NetworkHandler>(
-            config_.local_ip.c_str(),
-            config_.remote_ip.c_str(),
-            config_.local_port,
-            config_.remote_port
-        );
-        LOG_INFO("NetworkHandler initialized");
-    } catch (const std::exception& e) {
-        LOG_ERROR("NetworkHandler initialization failed: {}", e.what());
-        return Result<void>::error(AudioChatError::NetworkBindFailed, e.what());
+            config_.local_ip.c_str(), config_.remote_ip.c_str(),
+            config_.local_port, config_.remote_port);
+        return Result<void>::ok();
+    } catch (const std::exception& error) {
+        return Result<void>::error(AudioChatError::InternalError, error.what());
     }
-
-    return Result<void>::ok();
 }
 
 Result<void> AudioChatEngine::start() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
     if (!initialized_.load()) {
-        LOG_ERROR("Engine not initialized");
-        return Result<void>::error(AudioChatError::NotInitialized);
+        return Result<void>::error(AudioChatError::NotInitialized,
+                                   "Engine not initialized");
     }
-
     if (running_.load()) {
-        LOG_WARN("Engine already running");
         return Result<void>::ok();
     }
 
-    LOG_INFO("Starting AudioChat engine");
-
-    running_.store(true);
-
-    auto result = startThreads();
+    running_ = true;
+    const auto result = startThreads();
     if (result.isError()) {
-        running_.store(false);
-        LOG_ERROR("Failed to start threads: {}", result.message());
+        running_ = false;
+        if (network_) {
+            network_->stop();
+        }
+        work_cv_.notify_all();
+        joinThreads();
+        cleanupResources();
+        initialized_ = false;
         return result;
     }
-
-    LOG_INFO("AudioChat engine started successfully");
+    LOG_INFO("AudioChatEngine started");
     return Result<void>::ok();
 }
 
@@ -159,176 +130,155 @@ Result<void> AudioChatEngine::startThreads() {
         send_thread_ = std::thread(&AudioChatEngine::sendLoop, this);
         recv_thread_ = std::thread(&AudioChatEngine::recvLoop, this);
         play_thread_ = std::thread(&AudioChatEngine::playLoop, this);
-
-        LOG_INFO("All threads started");
         return Result<void>::ok();
-    } catch (const std::exception& e) {
-        LOG_ERROR("Failed to start threads: {}", e.what());
-        return Result<void>::error(AudioChatError::InternalError, e.what());
+    } catch (const std::exception& error) {
+        return Result<void>::error(AudioChatError::InternalError,
+                                   "Failed to start engine threads: " + std::string(error.what()));
     }
 }
 
 Result<void> AudioChatEngine::stop() {
-    if (!running_.load()) {
-        LOG_INFO("Engine not running, nothing to stop");
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (!running_.load() && !send_thread_.joinable() &&
+        !recv_thread_.joinable() && !play_thread_.joinable()) {
+        initialized_ = false;
+        cleanupResources();
         return Result<void>::ok();
     }
 
-    LOG_INFO("Stopping AudioChat engine");
-
-    return stopThreads();
-}
-
-Result<void> AudioChatEngine::stopThreads() {
-    running_.store(false);
-
-    // Signal all threads to wake up and check running flag
-    shutdown_cv_.notify_all();
-
-    // Join all threads with timeout
-    const int timeout_ms = 5000;
-    auto start_time = std::chrono::steady_clock::now();
-
-    LOG_INFO("Waiting for send thread to stop...");
-    if (send_thread_.joinable()) {
-        send_thread_.join();
+    LOG_INFO("AudioChatEngine stopping");
+    running_ = false;
+    if (network_) {
+        network_->stop();
     }
-
-    LOG_INFO("Waiting for recv thread to stop...");
-    if (recv_thread_.joinable()) {
-        recv_thread_.join();
+    if (audio_) {
+        audio_->stop();
     }
-
-    LOG_INFO("Waiting for play thread to stop...");
-    if (play_thread_.joinable()) {
-        play_thread_.join();
-    }
-
-    LOG_INFO("All threads stopped");
+    work_cv_.notify_all();
+    joinThreads();
+    cleanupResources();
+    initialized_ = false;
+    LOG_INFO("AudioChatEngine stopped");
     return Result<void>::ok();
 }
 
-void AudioChatEngine::sendLoop() {
-    LOG_INFO("Send thread started");
-    
-    int input_frames_per_buffer = config_.sample_rate * config_.frame_duration_ms / 1000;
-    int max_encode_size = input_frames_per_buffer * 2;
-
-    // Allocate buffers
-    auto packet_ptr = reinterpret_cast<PPacket>(malloc(sizeof(Packet) + max_encode_size * sizeof(uint8_t)));
-    auto capture_buffer_ptr = reinterpret_cast<int16_t*>(malloc(input_frames_per_buffer * sizeof(int16_t)));
-
-    if (!packet_ptr || !capture_buffer_ptr) {
-        LOG_ERROR("Failed to allocate buffers in send thread");
-        free(packet_ptr);
-        free(capture_buffer_ptr);
-        return;
+Result<void> AudioChatEngine::stopThreads() {
+    running_ = false;
+    if (network_) {
+        network_->stop();
     }
+    if (audio_) {
+        audio_->stop();
+    }
+    work_cv_.notify_all();
+    joinThreads();
+    return Result<void>::ok();
+}
 
-    uint8_t* encode_buffer_ptr = packet_ptr->payload;
+void AudioChatEngine::joinThreads() {
+    if (send_thread_.joinable()) {
+        send_thread_.join();
+    }
+    if (recv_thread_.joinable()) {
+        recv_thread_.join();
+    }
+    if (play_thread_.joinable()) {
+        play_thread_.join();
+    }
+}
+
+void AudioChatEngine::requestStop() {
+    running_ = false;
+    if (network_) {
+        network_->stop();
+    }
+    if (audio_) {
+        audio_->stop();
+    }
+    work_cv_.notify_all();
+}
+
+void AudioChatEngine::sendLoop() {
+    const int samples = codec_->getFramesPerBuffer();
+    std::vector<int16_t> capture(static_cast<size_t>(samples));
+    Packet packet;
+    packet.sample_rate = static_cast<uint16_t>(config_.sample_rate);
+    packet.channels = 1;
 
     while (running_.load()) {
         try {
-            // Wait for capture ready event (this should be refactored to condition_variable)
-            // For now, using a small sleep to prevent busy waiting
-            std::this_thread::sleep_for(std::chrono::milliseconds(config_.frame_duration_ms));
-
-            if (!running_.load()) break;
-
-            // Swap capture buffer
-            audio_->swapCaptureBuffer(capture_buffer_ptr);
-
-            // Encode
-            codec_->encode(capture_buffer_ptr, encode_buffer_ptr, max_encode_size, packet_ptr->data_size);
-
-            // Send
-            network_->send(packet_ptr);
-
-            LOG_TRACE("Sent encoded frame: size={}", packet_ptr->data_size);
-        } catch (const std::exception& e) {
-            LOG_ERROR("Error in send thread: {}", e.what());
+            if (audio_->readCaptureFrame(capture.data(), capture.size())) {
+                codec_->encode(capture.data(), packet.payload.data(),
+                               static_cast<int32_t>(packet.payload.size()), packet.data_size);
+                if (packet.data_size > 0) {
+                    network_->send(packet);
+                }
+                continue;
+            }
+        } catch (const std::exception& error) {
+            LOG_ERROR("Send loop error: {}", error.what());
+            requestStop();
+            break;
         }
-    }
 
-    free(packet_ptr);
-    free(capture_buffer_ptr);
-    LOG_INFO("Send thread stopped");
+        std::unique_lock<std::mutex> lock(work_mutex_);
+        work_cv_.wait_for(lock, 2ms, [this] { return !running_.load(); });
+    }
 }
 
 void AudioChatEngine::recvLoop() {
-    LOG_INFO("Recv thread started");
-
     while (running_.load()) {
         try {
-            network_->receive();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        } catch (const std::exception& e) {
-            LOG_ERROR("Error in recv thread: {}", e.what());
+            if (network_->receive()) {
+                continue;
+            }
+        } catch (const std::exception& error) {
+            LOG_ERROR("Receive loop error: {}", error.what());
+            requestStop();
+            break;
         }
-    }
 
-    LOG_INFO("Recv thread stopped");
+        std::unique_lock<std::mutex> lock(work_mutex_);
+        work_cv_.wait_for(lock, 5ms, [this] { return !running_.load(); });
+    }
 }
 
 void AudioChatEngine::playLoop() {
-    LOG_INFO("Play thread started");
-
-    int output_frames_per_buffer = config_.sample_rate * config_.frame_duration_ms / 1000;
-    int max_encode_size = output_frames_per_buffer * 2;
-
-    auto encode_buffer = reinterpret_cast<uint8_t*>(malloc(1024));
-    auto decode_buffer = reinterpret_cast<int16_t*>(malloc(output_frames_per_buffer * sizeof(int16_t)));
-
-    if (!encode_buffer || !decode_buffer) {
-        LOG_ERROR("Failed to allocate buffers in play thread");
-        free(encode_buffer);
-        free(decode_buffer);
-        return;
-    }
+    const int samples = codec_->getFramesPerBuffer();
+    std::array<uint8_t, kMaxAudioPacketPayload> encoded{};
+    std::vector<int16_t> decoded(static_cast<size_t>(samples));
 
     while (running_.load()) {
         try {
-            int32_t encode_out_size = 0;
-            int32_t decode_out_size = 0;
-
-            network_->getJitterBufferPacket(encode_buffer, encode_out_size);
-
-            if (encode_out_size > 0) {
-                codec_->decode(encode_buffer, encode_out_size, decode_buffer,
-                              output_frames_per_buffer * sizeof(int16_t), decode_out_size);
-
-                if (decode_out_size > 0) {
-                    audio_->play(decode_buffer, decode_out_size);
-                    LOG_TRACE("Played decoded frame: size={}", decode_out_size);
-                }
+            int32_t encoded_size = 0;
+            if (!network_->getJitterBufferPacket(encoded.data(), encoded.size(), encoded_size)) {
+                break;
+            }
+            if (encoded_size <= 0) {
+                continue;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        } catch (const std::exception& e) {
-            LOG_ERROR("Error in play thread: {}", e.what());
+            int32_t decoded_size = 0;
+            codec_->decode(encoded.data(), encoded_size, decoded.data(), samples, decoded_size);
+            if (decoded_size > 0) {
+                audio_->play(decoded.data(), decoded_size);
+            }
+        } catch (const std::exception& error) {
+            LOG_ERROR("Playback loop error: {}", error.what());
+            requestStop();
+            break;
         }
     }
-
-    free(encode_buffer);
-    free(decode_buffer);
-    LOG_INFO("Play thread stopped");
 }
 
 void AudioChatEngine::cleanupResources() {
-    LOG_DEBUG("Cleaning up resources");
-
     if (audio_) {
         audio_->stop();
         audio_.reset();
     }
-
-    if (codec_) {
-        codec_.reset();
-    }
-
+    codec_.reset();
     if (network_) {
+        network_->stop();
         network_.reset();
     }
-
-    LOG_DEBUG("Resources cleaned up");
 }

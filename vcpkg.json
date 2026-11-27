@@ -1,0 +1,20 @@
+{
+  "name": "audiochat",
+  "version": "0.5.0",
+  "builtin-baseline": "99541cc939bf01ae3c42f928266d648f5acb88fd",
+  "dependencies": [
+    "portaudio",
+    "opus",
+    "spdlog",
+    "yaml-cpp",
+    "gtest"
+  ],
+  "features": {
+    "aec": {
+      "description": "WebRTC Audio Processing backend required for production AEC",
+      "dependencies": [
+        "webrtc"
+      ]
+    }
+  }
+}

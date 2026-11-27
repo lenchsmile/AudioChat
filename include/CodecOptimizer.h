@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Result.h"
+#include <opus/opus.h>
 #include <cstdint>
 #include <memory>
 #include <string>

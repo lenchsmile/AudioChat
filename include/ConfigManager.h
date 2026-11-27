@@ -81,7 +81,7 @@ struct JitterBufferConfig {
  */
 struct ApplicationConfig {
     std::string name = "AudioChat";
-    std::string version = "1.0.0";
+    std::string version = "0.5.0";
     
     AudioConfig audio;
     CodecConfig codec;
@@ -202,7 +202,7 @@ public:
 
 private:
     ApplicationConfig config_;
-    std::string last_error_;
+    mutable std::string last_error_;
     
     // Helper methods
     void setDefaults();

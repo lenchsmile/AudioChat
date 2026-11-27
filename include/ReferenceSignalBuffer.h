@@ -5,6 +5,7 @@
 #include <vector>
 #include <deque>
 #include <memory>
+#include <mutex>
 
 namespace AudioChat {
 
@@ -60,9 +61,10 @@ public:
     ReferenceSignalBuffer(const ReferenceSignalBuffer&) = delete;
     ReferenceSignalBuffer& operator=(const ReferenceSignalBuffer&) = delete;
 
-    // Allow move operations
-    ReferenceSignalBuffer(ReferenceSignalBuffer&&) = default;
-    ReferenceSignalBuffer& operator=(ReferenceSignalBuffer&&) = default;
+    // The buffer is owned through unique_ptr; moving the mutex-backed object is
+    // intentionally disabled.
+    ReferenceSignalBuffer(ReferenceSignalBuffer&&) = delete;
+    ReferenceSignalBuffer& operator=(ReferenceSignalBuffer&&) = delete;
 
     /**
      * @brief Add reference signal (speaker output) to buffer
@@ -170,17 +172,16 @@ private:
     // Configuration
     Config config_;
 
-    // State
+    // State protected by buffer_mutex_.
     bool is_initialized_ = false;
     uint64_t frames_pushed_ = 0;
     uint64_t frames_retrieved_ = 0;
-
-    // Ring buffer for reference signal history
-    // We need to keep a history to apply the delay
     std::deque<int16_t> buffer_;
-
-    // Timestamp tracking for synchronization
+    uint64_t buffer_start_sample_ = 0;
+    uint64_t total_pushed_samples_ = 0;
+    uint64_t next_read_sample_ = 0;
     uint64_t last_push_timestamp_ms_ = 0;
+    mutable std::mutex buffer_mutex_;
 };
 
 } // namespace AudioChat

@@ -1,83 +1,129 @@
 #include "JitterBuffer.h"
+
 #include <algorithm>
-#include <stdexcept>
+#include <cstring>
+#include <iterator>
+#include <utility>
 
-JitterBuffer::JitterBuffer(int frame_size,int max_size) :
-	uint8_t_buffer_(nullptr),
-	temp_packet_(nullptr),
-	frames_per_buffer_(frame_size),
-	max_size_(max_size),
-	last_sequence_(0)
-{
-	uint8_t_buffer_ = reinterpret_cast<uint8_t*>(malloc(frames_per_buffer_ * max_size));
+namespace {
 
-	if(!uint8_t_buffer_)
-	{
-		throw std::runtime_error("Failed to allocate jitter buffer");
-	}
-
-	for(int i = 0; i < max_size; i++)
-	{
-		unused_buffer_.push_back(reinterpret_cast<PPacket>(uint8_t_buffer_ + i * frames_per_buffer_));
-	}
+bool sequenceIsNewer(uint32_t candidate, uint32_t reference) {
+    return candidate != reference &&
+           static_cast<int64_t>(static_cast<uint32_t>(candidate - reference)) > 0;
 }
 
-JitterBuffer::~JitterBuffer()
-{
-	stopped_ = true;
-	cv.notify_all();
+} // namespace
+
+JitterBuffer::JitterBuffer(size_t max_packets)
+    : max_packets_(std::max<size_t>(1, max_packets)) {
 }
 
-void JitterBuffer::addPacket(PPacket& packet)
-{
-	static std::unique_lock<std::mutex> lock(mutex,std::defer_lock);
-
-	if(packet->sequence <= last_sequence_) return;
-	lock.lock();
-	if(buffer_.size() >= max_size_)
-	{
-		temp_packet_ = buffer_.front();
-		buffer_.pop_front();
-	}
-	else
-	{
-		temp_packet_ = unused_buffer_.front();
-		unused_buffer_.pop_front();
-	}
-	std::swap(temp_packet_,packet);
-	buffer_.push_back(temp_packet_);
-	lock.unlock();
-	cv.notify_one();
+JitterBuffer::~JitterBuffer() {
+    stop();
 }
 
-void JitterBuffer::getPacket(uint8_t*& decode_buffer_ptr,int32_t& out_size)
-{
-	static std::unique_lock<std::mutex> lock(mutex,std::defer_lock);
-	lock.lock();
-	cv.wait(lock,[this]()
-	{
-		return !buffer_.empty() || stopped_;
-	});
+bool JitterBuffer::addPacket(Packet packet) {
+    if (packet.data_size < 0 ||
+        static_cast<size_t>(packet.data_size) > packet.payload.size()) {
+        return false;
+    }
 
-	std::sort(buffer_.begin(),buffer_.end(),
-		[](const PPacket& a,const PPacket& b)
-	{
-		return a->sequence < b->sequence;
-	});
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_) {
+        return false;
+    }
+    if (has_last_sequence_ && !sequenceIsNewer(packet.sequence, last_sequence_)) {
+        return true;
+    }
 
-	PPacket packet = buffer_.front();
-	buffer_.pop_front();
-	unused_buffer_.push_back(packet);
-	lock.unlock();
+    const auto duplicate = std::find_if(
+        buffer_.begin(), buffer_.end(),
+        [&packet](const Packet& queued) { return queued.sequence == packet.sequence; });
+    if (duplicate != buffer_.end()) {
+        return true;
+    }
 
-	if(packet->sequence != last_sequence_ + 1)
-	{
-		last_sequence_ = packet->sequence;
-		out_size = 0;
-		return; // 触发PLC
-	}
-	last_sequence_ = packet->sequence;
-	memcpy(decode_buffer_ptr,packet->payload,packet->data_size);
-	out_size = packet->data_size;
-	return;
+    if (buffer_.size() >= max_packets_) {
+        buffer_.pop_front();
+        ++dropped_packets_;
+    }
+    buffer_.push_back(std::move(packet));
+    cv_.notify_one();
+    return true;
+}
+
+bool JitterBuffer::getPacket(uint8_t* destination, size_t capacity, int32_t& out_size) {
+    out_size = 0;
+    if (!destination) {
+        return false;
+    }
+
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait(lock, [this] { return stopped_ || !buffer_.empty(); });
+    if (stopped_) {
+        return false;
+    }
+
+    while (!buffer_.empty()) {
+        auto selected = buffer_.begin();
+        for (auto candidate = std::next(buffer_.begin()); candidate != buffer_.end(); ++candidate) {
+            const bool newer = has_last_sequence_
+                ? sequenceIsNewer(candidate->sequence, selected->sequence)
+                : candidate->sequence < selected->sequence;
+            if (newer) {
+                selected = candidate;
+            }
+        }
+
+        Packet packet = std::move(*selected);
+        buffer_.erase(selected);
+
+        if (has_last_sequence_) {
+            const uint32_t expected = last_sequence_ + 1;
+            if (packet.sequence != expected) {
+                ++dropped_packets_;
+            }
+        }
+        last_sequence_ = packet.sequence;
+        has_last_sequence_ = true;
+
+        if (static_cast<size_t>(packet.data_size) > capacity) {
+            ++dropped_packets_;
+            continue;
+        }
+        if (packet.data_size > 0) {
+            std::memcpy(destination, packet.payload.data(),
+                        static_cast<size_t>(packet.data_size));
+        }
+        out_size = packet.data_size;
+        return true;
+    }
+
+    return false;
+}
+
+void JitterBuffer::stop() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stopped_ = true;
+    }
+    cv_.notify_all();
+}
+
+void JitterBuffer::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    buffer_.clear();
+    last_sequence_ = 0;
+    has_last_sequence_ = false;
+    dropped_packets_ = 0;
+}
+
+size_t JitterBuffer::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return buffer_.size();
+}
+
+uint64_t JitterBuffer::droppedPackets() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dropped_packets_;
 }

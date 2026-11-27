@@ -7,9 +7,13 @@ CongestionController::CongestionController() = default;
 CongestionController::~CongestionController() = default;
 
 void CongestionController::updatePacketLossRate(double loss_rate) {
-    current_loss_rate_ = loss_rate;
-    
+    if (!std::isfinite(loss_rate)) {
+        return;
+    }
+    loss_rate = std::clamp(loss_rate, 0.0, 100.0);
+
     std::lock_guard<std::mutex> lock(state_mutex_);
+    current_loss_rate_ = loss_rate;
     loss_history_.push_back(loss_rate);
     if (loss_history_.size() > HISTORY_SIZE) {
         loss_history_.pop_front();
@@ -19,9 +23,12 @@ void CongestionController::updatePacketLossRate(double loss_rate) {
 }
 
 void CongestionController::updateRtt(double rtt_ms) {
-    current_rtt_ = rtt_ms;
-    
+    if (!std::isfinite(rtt_ms) || rtt_ms < 0.0) {
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(state_mutex_);
+    current_rtt_ = rtt_ms;
     rtt_history_.push_back(rtt_ms);
     if (rtt_history_.size() > HISTORY_SIZE) {
         rtt_history_.pop_front();
@@ -59,17 +66,26 @@ CongestionLevel CongestionController::getCongestionLevel() const {
 }
 
 void CongestionController::setBitrateLimits(uint32_t min_kbps, uint32_t max_kbps) {
+    if (min_kbps == 0 || min_kbps > max_kbps) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(state_mutex_);
     min_bitrate_kbps_ = min_kbps;
     max_bitrate_kbps_ = max_kbps;
 }
 
 void CongestionController::setThresholds(double loss_threshold, double rtt_threshold) {
+    if (!std::isfinite(loss_threshold) || !std::isfinite(rtt_threshold) ||
+        loss_threshold <= 0.0 || rtt_threshold <= 0.0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(state_mutex_);
     loss_threshold_ = loss_threshold;
     rtt_threshold_ = rtt_threshold;
-    
-    // Set severe thresholds as 3x the normal thresholds
+
     severe_loss_threshold_ = loss_threshold * 3.0;
     severe_rtt_threshold_ = rtt_threshold * 2.5;
+    congestion_level_ = calculateCongestionLevel();
 }
 
 uint32_t CongestionController::getSendRateLimit() const {
@@ -104,17 +120,15 @@ CongestionLevel CongestionController::calculateCongestionLevel() {
     double smoothed_rtt = calculateSmoothedRtt();
     
     // Check severe conditions first
-    if (smoothed_loss > severe_loss_threshold_ || smoothed_rtt > severe_rtt_threshold_) {
+    if (smoothed_loss >= severe_loss_threshold_ || smoothed_rtt >= severe_rtt_threshold_) {
         return CongestionLevel::Severe;
     }
-    
-    // Check moderate conditions
-    if (smoothed_loss > loss_threshold_ * 2.0 || smoothed_rtt > rtt_threshold_ * 1.5) {
+
+    if (smoothed_loss >= loss_threshold_ * 2.0 || smoothed_rtt >= rtt_threshold_ * 1.5) {
         return CongestionLevel::Moderate;
     }
-    
-    // Check mild conditions
-    if (smoothed_loss > loss_threshold_ || smoothed_rtt > rtt_threshold_) {
+
+    if (smoothed_loss >= loss_threshold_ || smoothed_rtt >= rtt_threshold_) {
         return CongestionLevel::Mild;
     }
     

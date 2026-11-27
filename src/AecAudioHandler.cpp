@@ -1,4 +1,5 @@
 #include "AecAudioHandler.h"
+#include "AudioHandler.h"
 #include "Logger.h"
 #include <cstring>
 #include <sstream>
@@ -90,7 +91,7 @@ Result<std::unique_ptr<AecAudioHandler>> AecAudioHandler::Create(
         );
     }
 
-    return Result<std::unique_ptr<AecAudioHandler>>::ok(handler.release());
+    return Result<std::unique_ptr<AecAudioHandler>>::ok(std::move(handler));
 }
 
 AecAudioHandler::AecAudioHandler(std::unique_ptr<AudioHandler> audio_handler,

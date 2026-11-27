@@ -413,5 +413,3 @@ TEST_F(CodecOptimizerTest, RecommendedDefaults) {
     EXPECT_GE(config.bitrate_bps, 8000);
     EXPECT_LE(config.bitrate_bps, 128000);
 }
-
-} // namespace (empty, tests are in global namespace for gtest)

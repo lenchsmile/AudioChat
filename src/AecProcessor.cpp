@@ -90,7 +90,7 @@ Result<std::unique_ptr<AecProcessor>> AecProcessor::Create(const AecConfig& conf
         );
     }
     
-    return Result<std::unique_ptr<AecProcessor>>::ok(processor.release());
+    return Result<std::unique_ptr<AecProcessor>>::ok(std::move(processor));
 }
 
 AecProcessor::AecProcessor(const AecConfig& config) : config_(config) {

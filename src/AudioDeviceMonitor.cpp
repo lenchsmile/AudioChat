@@ -1,101 +1,109 @@
 #include "AudioDeviceMonitor.h"
+
+#include <portaudio.h>
 #include <algorithm>
 #include <chrono>
+#include <thread>
+#include <utility>
+#include <vector>
 
-AudioDeviceMonitor::AudioDeviceMonitor() = default;
+AudioDeviceMonitor::AudioDeviceMonitor() {
+    initializeDevices();
+}
 
 AudioDeviceMonitor::~AudioDeviceMonitor() {
     stop();
+    if (portaudio_initialized_) {
+        Pa_Terminate();
+    }
 }
 
 void AudioDeviceMonitor::start() {
-    if (running_) {
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+    if (running_.exchange(true)) {
         return;
     }
-    
-    running_ = true;
+
+    refreshDeviceList();
     monitoring_ = true;
-    
-    initializeDevices();
-    
-    monitor_thread_ = std::thread(&AudioDeviceMonitor::monitoringLoop, this);
+    try {
+        monitor_thread_ = std::thread(&AudioDeviceMonitor::monitoringLoop, this);
+    } catch (...) {
+        monitoring_ = false;
+        running_ = false;
+        throw;
+    }
 }
 
 void AudioDeviceMonitor::stop() {
-    running_ = false;
-    monitoring_ = false;
-    
+    {
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+        monitoring_ = false;
+        running_ = false;
+        wait_cv_.notify_all();
+    }
     if (monitor_thread_.joinable()) {
+        if (std::this_thread::get_id() == monitor_thread_.get_id()) {
+            return;
+        }
         monitor_thread_.join();
     }
 }
 
 void AudioDeviceMonitor::setDeviceEventCallback(DeviceEventCallback callback) {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    device_event_callback_ = callback;
+    device_event_callback_ = std::move(callback);
 }
 
 std::vector<AudioDeviceInfo> AudioDeviceMonitor::getInputDevices() const {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    
     std::vector<AudioDeviceInfo> result;
     for (const auto& device : input_devices_) {
         if (device.is_connected) {
             result.push_back(device);
         }
     }
-    
     return result;
 }
 
 std::vector<AudioDeviceInfo> AudioDeviceMonitor::getOutputDevices() const {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    
     std::vector<AudioDeviceInfo> result;
     for (const auto& device : output_devices_) {
         if (device.is_connected) {
             result.push_back(device);
         }
     }
-    
     return result;
 }
 
 AudioDeviceInfo AudioDeviceMonitor::getDefaultInputDevice() const {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    
     for (const auto& device : input_devices_) {
         if (device.is_default && device.is_connected) {
             return device;
         }
     }
-    
-    // Return first available if no default
     for (const auto& device : input_devices_) {
         if (device.is_connected) {
             return device;
         }
     }
-    
     return AudioDeviceInfo();
 }
 
 AudioDeviceInfo AudioDeviceMonitor::getDefaultOutputDevice() const {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    
     for (const auto& device : output_devices_) {
         if (device.is_default && device.is_connected) {
             return device;
         }
     }
-    
-    // Return first available if no default
     for (const auto& device : output_devices_) {
         if (device.is_connected) {
             return device;
         }
     }
-    
     return AudioDeviceInfo();
 }
 
@@ -105,115 +113,139 @@ void AudioDeviceMonitor::refreshDeviceList() {
 
 bool AudioDeviceMonitor::isDeviceConnected(const std::string& device_id) const {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    
-    auto check = [&device_id](const AudioDeviceInfo& dev) {
-        return dev.device_id == device_id && dev.is_connected;
+    const auto connected = [&device_id](const AudioDeviceInfo& device) {
+        return device.device_id == device_id && device.is_connected;
     };
-    
-    auto in_it = std::find_if(input_devices_.begin(), input_devices_.end(), check);
-    if (in_it != input_devices_.end()) {
-        return true;
-    }
-    
-    auto out_it = std::find_if(output_devices_.begin(), output_devices_.end(), check);
-    return out_it != output_devices_.end();
+    return std::any_of(input_devices_.begin(), input_devices_.end(), connected) ||
+           std::any_of(output_devices_.begin(), output_devices_.end(), connected);
 }
 
 void AudioDeviceMonitor::monitoringLoop() {
-    std::vector<AudioDeviceInfo> prev_input_devices;
-    std::vector<AudioDeviceInfo> prev_output_devices;
-    
+    std::unique_lock<std::mutex> wait_lock(wait_mutex_);
     while (monitoring_) {
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            prev_input_devices = input_devices_;
-            prev_output_devices = output_devices_;
-        }
-        
         detectDeviceChanges();
-        
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            
-            // Check for device changes
-            for (const auto& prev_dev : prev_input_devices) {
-                auto it = std::find_if(input_devices_.begin(), input_devices_.end(),
-                    [&prev_dev](const AudioDeviceInfo& dev) {
-                        return dev.device_id == prev_dev.device_id;
-                    });
-                
-                if (it == input_devices_.end() && prev_dev.is_connected) {
-                    // Device disconnected
-                    DeviceEvent event;
-                    event.type = DeviceEventType::Disconnected;
-                    event.device_id = prev_dev.device_id;
-                    event.device_name = prev_dev.device_name;
-                    notifyDeviceEvent(event);
-                }
-            }
-            
-            for (const auto& device : input_devices_) {
-                auto it = std::find_if(prev_input_devices.begin(), prev_input_devices.end(),
-                    [&device](const AudioDeviceInfo& dev) {
-                        return dev.device_id == device.device_id;
-                    });
-                
-                if (it == prev_input_devices.end() && device.is_connected) {
-                    // Device connected
-                    DeviceEvent event;
-                    event.type = DeviceEventType::Connected;
-                    event.device_id = device.device_id;
-                    event.device_name = device.device_name;
-                    notifyDeviceEvent(event);
-                }
-            }
-        }
-        
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(DEVICE_POLL_INTERVAL_MS));
+        wait_cv_.wait_for(wait_lock, std::chrono::milliseconds(DEVICE_POLL_INTERVAL_MS),
+                          [this] { return !monitoring_.load(); });
     }
 }
 
 void AudioDeviceMonitor::detectDeviceChanges() {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    
-    // This is a simplified implementation
-    // In a real implementation, would use Windows API or PortAudio
-    // to get actual device list changes
-    
-    // Placeholder: devices are marked as connected by default
-    for (auto& device : input_devices_) {
-        device.is_connected = true;
+    if (!portaudio_initialized_) {
+        const PaError error = Pa_Initialize();
+        if (error != paNoError) {
+            return;
+        }
+        portaudio_initialized_ = true;
     }
-    for (auto& device : output_devices_) {
-        device.is_connected = true;
+
+    std::vector<AudioDeviceInfo> new_inputs;
+    std::vector<AudioDeviceInfo> new_outputs;
+    const int count = Pa_GetDeviceCount();
+    const int default_input = Pa_GetDefaultInputDevice();
+    const int default_output = Pa_GetDefaultOutputDevice();
+
+    if (count >= 0) {
+        for (int index = 0; index < count; ++index) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(index);
+            if (!info) {
+                continue;
+            }
+            if (info->maxInputChannels > 0) {
+                AudioDeviceInfo device;
+                device.device_id = std::to_string(index);
+                device.device_name = info->name;
+                device.is_default = index == default_input;
+                device.is_input = true;
+                new_inputs.push_back(device);
+            }
+            if (info->maxOutputChannels > 0) {
+                AudioDeviceInfo device;
+                device.device_id = std::to_string(index);
+                device.device_name = info->name;
+                device.is_default = index == default_output;
+                device.is_output = true;
+                new_outputs.push_back(device);
+            }
+        }
+    }
+
+    std::vector<DeviceEvent> events;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        for (const auto& previous : input_devices_) {
+            const bool still_present = std::any_of(
+                new_inputs.begin(), new_inputs.end(),
+                [&previous](const AudioDeviceInfo& device) {
+                    return device.device_id == previous.device_id;
+                });
+            if (!still_present && previous.is_connected) {
+                events.push_back({DeviceEventType::Disconnected,
+                                  previous.device_name, previous.device_id});
+            }
+        }
+        for (const auto& device : new_inputs) {
+            const bool existed = std::any_of(
+                input_devices_.begin(), input_devices_.end(),
+                [&device](const AudioDeviceInfo& previous) {
+                    return previous.device_id == device.device_id;
+                });
+            if (!existed) {
+                events.push_back({DeviceEventType::Connected,
+                                  device.device_name, device.device_id});
+            }
+        }
+
+        for (const auto& previous : output_devices_) {
+            const bool still_present = std::any_of(
+                new_outputs.begin(), new_outputs.end(),
+                [&previous](const AudioDeviceInfo& device) {
+                    return device.device_id == previous.device_id;
+                });
+            if (!still_present && previous.is_connected) {
+                events.push_back({DeviceEventType::Disconnected,
+                                  previous.device_name, previous.device_id});
+            }
+        }
+        for (const auto& device : new_outputs) {
+            const bool existed = std::any_of(
+                output_devices_.begin(), output_devices_.end(),
+                [&device](const AudioDeviceInfo& previous) {
+                    return previous.device_id == device.device_id;
+                });
+            if (!existed) {
+                events.push_back({DeviceEventType::Connected,
+                                  device.device_name, device.device_id});
+            }
+        }
+
+        input_devices_ = std::move(new_inputs);
+        output_devices_ = std::move(new_outputs);
+    }
+
+    for (const auto& event : events) {
+        notifyDeviceEvent(event);
     }
 }
 
 void AudioDeviceMonitor::notifyDeviceEvent(const DeviceEvent& event) {
-    if (device_event_callback_) {
-        device_event_callback_(event);
+    DeviceEventCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        callback = device_event_callback_;
+    }
+    if (callback) {
+        callback(event);
     }
 }
 
 void AudioDeviceMonitor::initializeDevices() {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    
-    // Initialize with default devices
-    AudioDeviceInfo default_input;
-    default_input.device_id = "default_input";
-    default_input.device_name = "Default Audio Input";
-    default_input.is_default = true;
-    default_input.is_input = true;
-    default_input.is_connected = true;
-    input_devices_.push_back(default_input);
-    
-    AudioDeviceInfo default_output;
-    default_output.device_id = "default_output";
-    default_output.device_name = "Default Audio Output";
-    default_output.is_default = true;
-    default_output.is_output = true;
-    default_output.is_connected = true;
-    output_devices_.push_back(default_output);
+    if (portaudio_initialized_) {
+        return;
+    }
+    const PaError error = Pa_Initialize();
+    if (error != paNoError) {
+        return;
+    }
+    portaudio_initialized_ = true;
+    detectDeviceChanges();
 }
-

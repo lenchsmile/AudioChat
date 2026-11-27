@@ -4,6 +4,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <memory>
+#include <mutex>
 #include <string>
 
 /**
@@ -44,6 +45,8 @@ public:
 private:
     static std::shared_ptr<spdlog::logger> logger_;
     static bool initialized_;
+    static std::mutex mutex_;
+    static void initializeLocked(const std::string& log_dir, const std::string& log_level);
 };
 
 // Convenience macros

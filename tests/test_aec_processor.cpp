@@ -159,7 +159,7 @@ TEST_F(AecProcessorTest, CreateWithValidConfig) {
     auto result = AecProcessor::Create(config);
     EXPECT_TRUE(result.isOk()) << "Should create processor with valid config";
     
-    auto processor = result.value();
+    auto processor = std::move(result.value());
     EXPECT_TRUE(processor != nullptr) << "Processor should not be null";
     EXPECT_EQ(processor->GetConfig().sample_rate_hz, 48000);
     EXPECT_EQ(processor->GetConfig().num_channels, 1);
@@ -419,5 +419,3 @@ TEST_F(AecProcessorTest, VariableSampleRateConfigs) {
         EXPECT_TRUE(result.isOk()) << "Failed for sample rate " << sr;
     }
 }
-
-} // namespace (empty, tests are in global namespace for gtest)

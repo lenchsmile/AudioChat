@@ -99,7 +99,7 @@ TEST_F(Phase2IntegrationTest, AecProcessorCreation) {
     auto result = AecProcessor::Create(config);
     
     EXPECT_TRUE(result.isOk()) << "AecProcessor should create successfully";
-    auto processor = result.value();
+    auto processor = std::move(result.value());
     EXPECT_TRUE(processor != nullptr);
     EXPECT_EQ(processor->GetConfig().sample_rate_hz, 48000);
 }
@@ -109,7 +109,7 @@ TEST_F(Phase2IntegrationTest, ReferenceSignalBufferCreation) {
     auto result = ReferenceSignalBuffer::Create(config);
     
     EXPECT_TRUE(result.isOk()) << "ReferenceSignalBuffer should create successfully";
-    auto buffer = result.value();
+    auto buffer = std::move(result.value());
     EXPECT_TRUE(buffer != nullptr);
     EXPECT_EQ(buffer->GetConfig().delay_ms, 30);
 }
@@ -508,5 +508,3 @@ TEST_F(Phase2IntegrationTest, ScenarioLowBandwidth) {
     auto result = codec_config.Validate();
     EXPECT_TRUE(result.isOk());
 }
-
-} // namespace (empty, tests are in global namespace for gtest)

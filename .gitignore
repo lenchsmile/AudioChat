@@ -1,6 +1,8 @@
 # CMake
 out/
 *.cmake
+!cmake/
+!cmake/*.cmake
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
@@ -46,3 +48,4 @@ recorde/
 # vcpkg (optional - uncomment if you want to track it)
 # thirdparty/vcpkg/
 # thirdparty/vcpkg-installed/
+vcpkg_installed/
