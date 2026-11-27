@@ -19,9 +19,13 @@
 | 2.2.3 单元测试 | ✅ 完成 | 2026-11-27 | test_aec_processor.cpp (450+ 行, 20+ 测试) |
 | 2.3.1 参考信号队列 | ✅ 完成 | 2026-11-27 | ReferenceSignalBuffer.h (395 行) |
 | 2.3.2 时序对齐 | ✅ 完成 | 2026-11-27 | 延迟补偿实现，test_reference_signal_buffer.cpp (450+ 行, 20+ 测试) |
-| 2.4-2.6 | ⏳ 计划中 | - | 等待 2.3 完成 |
+| 2.4.1 AudioHandler 集成 | ✅ 完成 | 2026-11-27 | AecAudioHandler.h (395 行) |
+| 2.4.2 AEC 启用/禁用 | ✅ 完成 | 2026-11-27 | EnableAec/DisableAec 实现 |
+| 2.4.3 参考/捕获信号处理 | ✅ 完成 | 2026-11-27 | ProcessReferenceSignal/ProcessCaptureSignal |
+| 2.4.4 集成测试 | ✅ 完成 | 2026-11-27 | test_aec_audio_handler.cpp (450+ 行, 25+ 测试) |
+| 2.5-2.6 | ⏳ 计划中 | - | 等待 2.4 完成 |
 
-**当前里程碑**: Step 2.3 ✅ | 下一步: Step 2.4 (AudioHandler 集成 - HIGH RISK)
+**当前里程碑**: Step 2.4 ✅ | 下一步: Step 2.5 (Codec 参数优化)
 
 ---
 
@@ -54,10 +58,11 @@
 │  └─ 缓冲测试                 [✅ 完成]
 │
 ├─ 2.4 AudioHandler 集成 (高风险)
-│  ├─ AEC 启用/禁用
-│  ├─ 参考信号采集
-│  ├─ 捕获信号处理
-│  └─ 集成测试
+│  ├─ AecAudioHandler 包装器   [✅ 完成]
+│  ├─ AEC 启用/禁用            [✅ 完成]
+│  ├─ 参考信号采集             [✅ 完成]
+│  ├─ 捕获信号处理             [✅ 完成]
+│  └─ 集成测试                 [✅ 完成]
 │
 ├─ 2.5 Codec 参数优化 (低风险)
 │  ├─ DTX 启用
