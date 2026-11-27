@@ -5,6 +5,7 @@ if(spdlog_FOUND AND Opus_FOUND)
         test_result.cpp
         test_codec.cpp
         test_aec_processor.cpp
+        test_reference_signal_buffer.cpp
     )
 
     # Link libraries
@@ -27,6 +28,7 @@ if(spdlog_FOUND AND Opus_FOUND)
         ${CMAKE_SOURCE_DIR}/src/Result.cpp
         ${CMAKE_SOURCE_DIR}/src/Codec.cpp
         ${CMAKE_SOURCE_DIR}/src/AecProcessor.cpp
+        ${CMAKE_SOURCE_DIR}/src/ReferenceSignalBuffer.cpp
     )
 
     # Register tests
