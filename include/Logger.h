@@ -1,0 +1,55 @@
+#pragma once
+
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/rotating_file_sink.h>
+#include <memory>
+#include <string>
+
+/**
+ * @brief Logger management system using spdlog
+ */
+class Logger {
+public:
+    /**
+     * @brief Initialize the logging system
+     * @param log_dir Directory for log files
+     * @param log_level Log level (trace, debug, info, warn, error, critical)
+     */
+    static void init(const std::string& log_dir = "logs", 
+                     const std::string& log_level = "info");
+
+    /**
+     * @brief Get the logger instance
+     * @return Shared pointer to spdlog logger
+     */
+    static std::shared_ptr<spdlog::logger> get();
+
+    /**
+     * @brief Set log level dynamically
+     * @param level Log level string
+     */
+    static void setLevel(const std::string& level);
+
+    /**
+     * @brief Flush all loggers
+     */
+    static void flush();
+
+    /**
+     * @brief Close and cleanup loggers
+     */
+    static void shutdown();
+
+private:
+    static std::shared_ptr<spdlog::logger> logger_;
+    static bool initialized_;
+};
+
+// Convenience macros
+#define LOG_TRACE(...) Logger::get()->trace(__VA_ARGS__)
+#define LOG_DEBUG(...) Logger::get()->debug(__VA_ARGS__)
+#define LOG_INFO(...) Logger::get()->info(__VA_ARGS__)
+#define LOG_WARN(...) Logger::get()->warn(__VA_ARGS__)
+#define LOG_ERROR(...) Logger::get()->error(__VA_ARGS__)
+#define LOG_CRITICAL(...) Logger::get()->critical(__VA_ARGS__)

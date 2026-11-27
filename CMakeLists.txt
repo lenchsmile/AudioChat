@@ -43,14 +43,33 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(PortAudio REQUIRED)
 find_package(Opus REQUIRED)
 
+# Find spdlog for logging
+find_package(spdlog REQUIRED)
+
+# Find or use built-in gtest for testing
+enable_testing()
+find_package(GTest QUIET)
+if(NOT GTest_FOUND)
+    message(STATUS "GTest not found, using FetchContent to download")
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    )
+    FetchContent_MakeAvailable(googletest)
+endif()
+
 # Create executable
 add_executable(${PROJECT_NAME}
     src/main.cpp
+    src/Logger.cpp
+    src/Result.cpp
     src/AudioHandler.cpp
     src/AudioRecorder.cpp
     src/Codec.cpp
     src/JitterBuffer.cpp
     src/NetworkHandler.cpp
+    src/AudioChatEngine.cpp
 )
 
 # Target properties
@@ -73,6 +92,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     PortAudio::PortAudio
     Opus::Opus
+    spdlog::spdlog
     ws2_32
     winmm
 )
@@ -111,3 +131,6 @@ if(NOT TARGET uninstall)
         COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake
     )
 endif()
+
+# Tests
+add_subdirectory(tests)

@@ -12,6 +12,11 @@ public:
 	// 同样改为按值传指针/长度，out_size 为引用
 	void decode(const uint8_t* encoded,int32_t encode_length,int16_t* decoded,int32_t decode_length,int32_t& out_size);
 
+	// Getters for accessing internal state
+	OpusEncoder* getEncoder() { return encoder_; }
+	OpusDecoder* getDecoder() { return decoder_; }
+	int getFramesPerBuffer() const { return frames_per_buffer_; }
+
 private:
 	OpusEncoder* encoder_;
 	OpusDecoder* decoder_;
