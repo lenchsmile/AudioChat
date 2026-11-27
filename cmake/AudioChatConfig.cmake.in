@@ -1,0 +1,15 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(PortAudio)
+find_dependency(Opus)
+
+if(NOT TARGET AudioChat::AudioChat)
+    add_executable(AudioChat::AudioChat IMPORTED GLOBAL)
+    set_target_properties(AudioChat::AudioChat PROPERTIES
+        IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../bin/AudioChat"
+    )
+endif()
+
+check_required_components(AudioChat)

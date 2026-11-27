@@ -1,3 +1,14 @@
+# CMake
+out/
+*.cmake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+compile_commands.json
+
+# Visual Studio
 .vs/
 x64/
 Debug/
@@ -13,3 +24,25 @@ Release/
 *.tlog
 *.lib
 *.log
+
+# IDE
+.idea/
+.vscode/
+*.vcxproj
+*.vcxproj.filters
+*.sln
+*.suo
+*.cache
+*.filters
+*.user
+
+# Generated files
+recorde/
+
+# Clang
+.clang-format
+.clang-tidy
+
+# vcpkg (optional - uncomment if you want to track it)
+# thirdparty/vcpkg/
+# thirdparty/vcpkg-installed/

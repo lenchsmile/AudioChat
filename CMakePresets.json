@@ -1,0 +1,112 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "clang-debug",
+      "displayName": "Clang Debug",
+      "description": "Debug build with Clang compiler",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/clang-debug",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/thirdparty/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/thirdparty/vcpkg/installed"
+      }
+    },
+    {
+      "name": "clang-release",
+      "displayName": "Clang Release",
+      "description": "Release build with Clang compiler",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/clang-release",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/thirdparty/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/thirdparty/vcpkg/installed"
+      }
+    },
+    {
+      "name": "msvc-debug",
+      "displayName": "MSVC Debug",
+      "description": "Debug build with MSVC compiler",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/msvc-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/thirdparty/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/thirdparty/vcpkg/installed"
+      }
+    },
+    {
+      "name": "msvc-release",
+      "displayName": "MSVC Release",
+      "description": "Release build with MSVC compiler",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/msvc-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/thirdparty/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/thirdparty/vcpkg/installed"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug",
+      "displayName": "Clang Debug Build",
+      "targets": ["AudioChat"]
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release",
+      "displayName": "Clang Release Build",
+      "targets": ["AudioChat"]
+    },
+    {
+      "name": "msvc-debug",
+      "configurePreset": "msvc-debug",
+      "displayName": "MSVC Debug Build",
+      "targets": ["AudioChat"]
+    },
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-release",
+      "displayName": "MSVC Release Build",
+      "targets": ["AudioChat"]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug",
+      "displayName": "Clang Debug Tests",
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release",
+      "displayName": "Clang Release Tests",
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    }
+  ]
+}
