@@ -8,6 +8,7 @@ if(spdlog_FOUND AND Opus_FOUND)
         test_reference_signal_buffer.cpp
         test_aec_audio_handler.cpp
         test_codec_optimizer.cpp
+        test_phase2_integration.cpp
     )
 
     # Link libraries
